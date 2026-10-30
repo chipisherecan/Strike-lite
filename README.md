@@ -12,8 +12,9 @@ checks for a newer release, updates the game and itself, and verifies each downl
 editor are kept across updates. Windows may warn about an unknown publisher because the exe isn't code-signed
 (More info > Run anyway).
 
-**Playing with friends online:** everyone clicks **Install Radmin VPN** in the launcher (the official, unmodified
-installer is built in, and you accept Radmin's own license agreement when it runs). Join the same Radmin network. The
+**Playing with friends online:** on first run the launcher installs the game, then starts the built-in official Radmin
+VPN installer if the PC doesn't have it (accept Radmin's license and the Windows admin prompt; if you cancel, use the
+**Install Radmin VPN** button later). Everyone joins the same Radmin network. The
 host clicks **Play / Host a game** and shares the address shown at the bottom; friends type it under **Join a friend**.
 Allow Node.js through Windows Firewall when asked, on both private and public networks.
 

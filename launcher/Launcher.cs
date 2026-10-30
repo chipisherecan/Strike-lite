@@ -183,6 +183,48 @@ class LauncherForm : Form {
                 : "Couldn't download the game: " + e.Message);
         }
         Ui(() => playBtn.Enabled = File.Exists(Path.Combine(GameDir, "server.js")));
+        AutoInstallRadmin();
+    }
+
+    // First run on a PC without Radmin VPN: start the built-in installer once, right after the game is ready.
+    // If the player cancels it we don't ask again; the Install button stays available.
+    void AutoInstallRadmin() {
+        if (RadminExe() != null || File.Exists(RadminMarker)) return;
+        try {
+            SetStatus("Installing Radmin VPN: accept the prompts in the installer window...");
+            var p = StartRadminInstaller();
+            if (p == null) return;
+            p.WaitForExit();
+            SetStatus(RadminExe() != null ? "Radmin VPN installed. You're ready to play." : "Radmin VPN wasn't installed. You can install it later with the button below.");
+        } catch (Exception) {
+            // includes pressing No on the Windows admin prompt
+            SetStatus("Radmin VPN wasn't installed. You can install it later with the button below.");
+        }
+        Ui(() => RefreshNetwork());
+    }
+
+    string RadminMarker { get { return Path.Combine(root, "radmin-offered.txt"); } }
+    readonly object radminLock = new object();
+    Process radminInstaller;
+
+    // The automatic install and the button share this, so a player can't end up with two installers open.
+    // Returns null when one is already running.
+    Process StartRadminInstaller() {
+        lock (radminLock) {
+            if (radminInstaller != null && !radminInstaller.HasExited) return null;
+            Directory.CreateDirectory(root);
+            File.WriteAllText(RadminMarker, DateTime.Now.ToString("o"));
+            // the unmodified official installer, run normally so the user reads and accepts Radmin's own agreement
+            radminInstaller = Process.Start(new ProcessStartInfo(ExtractRadmin()) { UseShellExecute = true });
+            return radminInstaller;
+        }
+    }
+
+    string ExtractRadmin() {
+        string file = Path.Combine(Path.GetTempPath(), BuildInfo.RadminFile);
+        using (var res = Assembly.GetExecutingAssembly().GetManifestResourceStream("radmin.exe"))
+        using (var o = File.Create(file)) res.CopyTo(o);
+        return file;
     }
 
     void InstallGame(Dictionary<string, string> assets, string tag) {
@@ -315,11 +357,7 @@ class LauncherForm : Form {
         string exe = RadminExe();
         try {
             if (exe != null) { Process.Start(exe); return; }
-            string file = Path.Combine(Path.GetTempPath(), BuildInfo.RadminFile);
-            using (var res = Assembly.GetExecutingAssembly().GetManifestResourceStream("radmin.exe"))
-            using (var o = File.Create(file)) res.CopyTo(o);
-            // the unmodified official installer, run normally so the user reads and accepts Radmin's own agreement
-            Process.Start(new ProcessStartInfo(file) { UseShellExecute = true });
+            if (StartRadminInstaller() == null) status.Text = "The Radmin VPN installer is already open.";
         } catch (Exception e) { status.Text = "Couldn't open Radmin VPN: " + e.Message; }
     }
 }
