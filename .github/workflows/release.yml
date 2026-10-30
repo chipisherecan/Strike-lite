@@ -1,0 +1,26 @@
+# Push a tag like v1.0.1 to build the game and launcher and publish them as a GitHub release.
+# Every installed launcher picks the new release up the next time it opens.
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build
+        shell: powershell
+        run: .\tools\build-release.ps1 -Repo "${{ github.repository }}" -Tag "${{ github.ref_name }}"
+      - name: Publish
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = (Get-ChildItem dist -File).FullName
+          gh release create "${{ github.ref_name }}" $files --title "Strike Lite ${{ github.ref_name }}" --generate-notes

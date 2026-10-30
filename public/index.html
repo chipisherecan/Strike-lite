@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strike Lite</title>
+<link rel="stylesheet" href="/style.css">
+<script type="importmap">{ "imports": { "three": "/three/three.module.js" } }</script>
+</head>
+<body>
+<div id="view"></div>
+
+<!-- ============ MAIN MENU ============ -->
+<div id="menu" class="screen">
+  <div class="menu-left">
+    <h1>STRIKE<span>LITE</span></h1>
+    <div class="sub">5v5 tactical shooter · bomb defusal</div>
+    <label class="field">Your name <input id="name" maxlength="16" placeholder="Player"></label>
+    <button class="big" data-panel="browser">Find a lobby</button>
+    <button class="big" data-panel="create">Create lobby</button>
+    <button class="big" id="open-editor">Map editor</button>
+    <button class="big" data-panel="settings">Settings</button>
+    <button class="big" data-panel="controls">Controls</button>
+    <div id="conn" class="conn">Connecting…</div>
+  </div>
+  <div class="menu-right">
+    <div class="panel" id="p-browser">
+      <h2>Lobbies on this server</h2>
+      <table class="lobbies"><thead><tr><th>Name</th><th>Map</th><th>Players</th><th>Score</th><th></th></tr></thead><tbody id="lobby-rows"></tbody></table>
+      <div id="no-lobbies" class="hint">No lobbies yet. Create one!</div>
+      <div class="row"><button id="refresh">Refresh</button><input id="join-code" maxlength="5" placeholder="Lobby code"><button id="join-code-btn">Join by code</button></div>
+    </div>
+    <div class="panel" id="p-create">
+      <h2>Create a lobby</h2>
+      <label class="field">Lobby name <input id="c-name" maxlength="32" placeholder="My lobby"></label>
+      <div class="field">Map</div>
+      <div id="c-maps" class="maps"></div>
+      <div class="grid2">
+        <label class="field">Max players <select id="c-max"><option>2</option><option>4</option><option>6</option><option>8</option><option selected>10</option></select></label>
+        <label class="field">Bots <select id="c-bots"><option>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option selected>9</option></select></label>
+        <label class="field">Bot difficulty <select id="c-diff"><option value="easy">Easy</option><option value="normal" selected>Normal</option><option value="hard">Hard</option></select></label>
+        <label class="field">Match length <select id="c-rounds"><option value="8">Short (8 rounds)</option><option value="16" selected>Normal (16 rounds)</option><option value="24">Long (24 rounds)</option></select></label>
+        <label class="field">Your team <select id="c-team"><option value="auto">Auto</option><option value="T">Terrorists</option><option value="CT">Counter-Terrorists</option></select></label>
+        <label class="field">Password (optional) <input id="c-pass" maxlength="32"></label>
+      </div>
+      <button class="big go" id="create-btn">Create &amp; play</button>
+      <div class="hint">Friends join from "Find a lobby" after opening the address shown in the server window.</div>
+    </div>
+    <div class="panel" id="p-settings">
+      <h2>Settings</h2>
+      <div id="settings-body"></div>
+    </div>
+    <div class="panel" id="p-controls">
+      <h2>Controls</h2>
+      <table class="keys">
+        <tr><td>W A S D</td><td>Move</td></tr><tr><td>Shift</td><td>Walk (quiet, accurate)</td></tr>
+        <tr><td>Ctrl / C</td><td>Crouch</td></tr><tr><td>Space</td><td>Jump</td></tr>
+        <tr><td>Mouse 1</td><td>Shoot / throw / plant</td></tr><tr><td>Mouse 2</td><td>Scope (AWP) / heavy knife</td></tr>
+        <tr><td>1 2 3 4 5</td><td>Primary / pistol / knife / grenades / bomb</td></tr><tr><td>Q</td><td>Last weapon</td></tr>
+        <tr><td>Mouse wheel</td><td>Switch weapon</td></tr><tr><td>R</td><td>Reload</td></tr>
+        <tr><td>E</td><td>Plant / defuse (hold), pick up weapon</td></tr><tr><td>G</td><td>Drop weapon</td></tr>
+        <tr><td>B</td><td>Buy menu</td></tr><tr><td>Tab</td><td>Scoreboard</td></tr>
+        <tr><td>M</td><td>Change team</td></tr><tr><td>Y / U</td><td>Chat / team chat</td></tr>
+        <tr><td>Esc</td><td>Menu</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ============ HUD ============ -->
+<div id="hud" class="hidden">
+  <canvas id="radar" width="200" height="200"></canvas>
+  <div id="topbar">
+    <div class="sc t"><span id="sc-t">0</span><div id="alive-t" class="alive"></div></div>
+    <div id="timer">1:55</div>
+    <div class="sc ct"><span id="sc-ct">0</span><div id="alive-ct" class="alive"></div></div>
+  </div>
+  <div id="killfeed"></div>
+  <div id="crosshair"><i class="l"></i><i class="r"></i><i class="u"></i><i class="d"></i></div>
+  <div id="hitmarker"></div>
+  <div id="scope" class="hidden"></div>
+  <div id="center-msg"></div>
+  <div id="round-msg"></div>
+  <div id="hint"></div>
+  <div id="progress" class="hidden"><div class="label"></div><div class="bar"><div></div></div></div>
+  <div id="dmg-ind"></div>
+  <div id="bottom-left">
+    <div class="stat"><b>+</b><span id="hp">100</span></div>
+    <div class="stat"><b id="armor-icon">⛨</b><span id="armor">0</span></div>
+    <div id="bomb-icon" class="hidden">C4</div>
+    <div id="kit-icon" class="hidden">KIT</div>
+  </div>
+  <div id="money">$800</div>
+  <div id="bottom-right">
+    <div id="slots"></div>
+    <div id="weapon-name">USP-S</div>
+    <div id="ammo"><span id="mag">12</span><small id="reserve">/ 24</small></div>
+  </div>
+  <div id="spec" class="hidden"></div>
+  <div id="chat"></div>
+  <input id="chat-input" class="hidden" maxlength="120" autocomplete="off">
+  <div id="flash"></div>
+  <div id="fps" class="hidden"></div>
+</div>
+
+<div id="buymenu" class="overlay hidden"><div class="box"><h2>Buy menu <span id="buy-money"></span></h2><div id="buy-cats"></div><div class="hint">Press B or Esc to close. Buy at your spawn during freeze time and the first 20 seconds.</div></div></div>
+
+<div id="scoreboard" class="overlay hidden"><div class="box wide">
+  <div class="sb-head"><span id="sb-title"></span><span id="sb-score"></span></div>
+  <div class="sb-team ct"><h3>Counter-Terrorists</h3><table id="sb-ct"></table></div>
+  <div class="sb-team t"><h3>Terrorists</h3><table id="sb-t"></table></div>
+  <div id="sb-spec" class="hint"></div>
+</div></div>
+
+<div id="teamselect" class="overlay hidden"><div class="box">
+  <h2>Choose your team</h2>
+  <div class="teams">
+    <button class="team t" data-team="T">TERRORISTS<small id="ts-t"></small></button>
+    <button class="team ct" data-team="CT">COUNTER-<br>TERRORISTS<small id="ts-ct"></small></button>
+  </div>
+  <div class="row center"><button data-team="auto">Auto select</button><button data-team="SPEC">Spectate</button></div>
+</div></div>
+
+<div id="pause" class="overlay hidden"><div class="box">
+  <h2>Paused <small id="lobby-code"></small></h2>
+  <button class="big" id="resume">Resume</button>
+  <button class="big" id="p-team">Change team</button>
+  <button class="big" id="p-settings-btn">Settings</button>
+  <div id="host-tools" class="hidden">
+    <h3>Host controls</h3>
+    <div class="row"><select id="h-map"></select><button id="h-map-btn">Change map</button></div>
+    <div class="row"><label>Bots <select id="h-bots"></select></label><label>Difficulty <select id="h-diff"><option value="easy">Easy</option><option value="normal">Normal</option><option value="hard">Hard</option></select></label><button id="h-restart">Restart match</button></div>
+  </div>
+  <button class="big danger" id="leave">Leave lobby</button>
+  <div id="pause-settings" class="hidden"></div>
+</div></div>
+
+<div id="matchend" class="overlay hidden"><div class="box"><h2 id="me-title"></h2><div id="me-score" class="bigscore"></div><div class="hint">Next match starts in a few seconds…</div></div></div>
+
+<div id="loading" class="overlay hidden"><div class="box"><h2>Loading map…</h2></div></div>
+
+<!-- ============ MAP EDITOR PASSWORD ============ -->
+<div id="editor-lock" class="overlay hidden" style="z-index:40"><form class="box" id="editor-lock-form">
+  <h2>Map editor</h2>
+  <label class="field">Password <input id="editor-pass" type="password" autocomplete="off"></label>
+  <div id="editor-lock-msg" class="hint"></div>
+  <div class="row"><button type="submit">Unlock</button><button type="button" id="editor-lock-cancel">Cancel</button></div>
+</form></div>
+
+<!-- ============ MAP EDITOR ============ -->
+<div id="editor" class="hidden">
+  <div class="ed-bar">
+    <b>MAP EDITOR</b>
+    <select id="ed-map"></select>
+    <button id="ed-undo" title="Ctrl+Z">Undo</button><button id="ed-redo" title="Ctrl+Y">Redo</button>
+    <button id="ed-3d">3D view</button>
+    <button id="ed-check">Check</button>
+    <button id="ed-save" class="go">Save map</button>
+    <button id="ed-reset">Reset to original</button>
+    <button id="ed-help">Help</button>
+    <button id="ed-exit">Exit</button>
+    <span id="ed-status"></span>
+  </div>
+  <div class="ed-main">
+    <div class="ed-tools">
+      <button data-edtool="select" class="on" title="S">Select<small>S</small></button>
+      <button data-edtool="box" title="B">Box<small>B</small></button>
+      <button data-edtool="ramp" title="R">Ramp<small>R</small></button>
+      <button data-edtool="zone" title="Z">Zones<small>Z</small></button>
+      <button data-edtool="decor" title="D">Decor<small>D</small></button>
+      <button data-edtool="light" title="L">Light<small>L</small></button>
+    </div>
+    <div class="ed-view"><canvas id="ed-canvas"></canvas><div id="ed-3dview" class="hidden"></div></div>
+    <div class="ed-props" id="ed-props"></div>
+  </div>
+  <div class="ed-foot" id="ed-info"></div>
+  <div id="ed-helpbox" class="hidden">
+    <h3>How to edit maps</h3>
+    <p>Maps are built from <b>brushes</b> (solid boxes and ramps), like CS 1.6 maps in Hammer. The view is from above: up on the screen is north.</p>
+    <ul>
+      <li><b>Move the view:</b> right-drag to pan, mouse wheel to zoom.</li>
+      <li><b>Select (S):</b> click a brush, Shift+click for more, drag on empty space to box-select. Drag to move, drag the yellow squares to resize. Arrow keys nudge, Page Up/Down raise/lower.</li>
+      <li><b>Box (B):</b> pick a preset (wall, floor/platform, crate, roof), set bottom/top heights and textures, then drag a rectangle.</li>
+      <li><b>Ramp (R):</b> set the low and high heights and which way it rises, then drag a rectangle. Use ramps for stairs and slopes.</li>
+      <li><b>Zones (Z):</b> drag where bombsite A/B and the T/CT spawns are.</li>
+      <li><b>Decor (D):</b> lamps (under roofs), palms, trees, doors (drag across a doorway), awnings.</li>
+      <li><b>Light (L):</b> click to add a light that is baked into the map lighting.</li>
+      <li><b>Ctrl+Z / Ctrl+Y</b> undo/redo, <b>Ctrl+D</b> duplicate, <b>Delete</b> remove.</li>
+      <li>Players can walk up 0.45 m steps and jump about 0.95 m. Doorways need at least 2 m of headroom.</li>
+      <li><b>Check</b> tests that both teams can reach both sites. <b>Save map</b> stores it for every new lobby (press F5 afterwards). <b>Reset to original</b> brings back the traced map.</li>
+    </ul>
+    <button onclick="document.getElementById('ed-helpbox').classList.add('hidden')">Close</button>
+  </div>
+</div>
+
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>

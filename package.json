@@ -1,0 +1,17 @@
+﻿{
+  "name": "strike-lite",
+  "version": "1.0.0",
+  "description": "A lightweight CS-style tactical shooter with lobbies, bots and 3 maps. Runs in the browser on low-end PCs.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node tools/walk-test.js"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "three": "0.160.0",
+    "ws": "8.18.0"
+  }
+}

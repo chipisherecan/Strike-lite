@@ -1,0 +1,4 @@
+node_modules/
+dist/
+server-errors.log
+shared/mapdata/edits.backup.js
