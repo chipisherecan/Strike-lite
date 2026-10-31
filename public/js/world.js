@@ -1,7 +1,7 @@
 // Renders a brush map the GoldSrc way:
 //  1. CSG: every brush face is clipped against the other brushes, so faces hidden inside walls/floors disappear
 //     (what qcsg does when a Hammer map is compiled).
-//  2. Lightmaps: every visible face gets a grid of light samples ("luxels", 0.5 m apart) with sun shadows,
+//  2. Lightmaps: every visible face gets a grid of light samples ("luxels", 0.25 m apart) with sun shadows,
 //     sky light, bounce and point lights (lamps). They are packed into one atlas texture (like qrad + the BSP lighting
 //     lump) and cached in the browser so only the first load of a map spends time baking.
 //  3. Textures are mapped with world-aligned axes like Hammer's default texture alignment.
@@ -13,8 +13,8 @@ import { floorAt, Z_A, Z_B } from '/shared/maps.js';
 import { getNav } from '/shared/nav.js';
 import { surfaceTexture, isTextureCached, TEX_SCALE } from './textures.js';
 
-const LUXEL = 0.5;                 // metres between light samples
-const ATLAS_W = 1024;
+const LUXEL = 0.25;                // metres between light samples
+const ATLAS_W = 4096;
 const EPS = 0.002;
 
 // ---------------------------------------------------------------- polygon helpers
@@ -228,7 +228,8 @@ async function cachePut(key, val) {
 }
 
 // ---------------------------------------------------------------- world build
-export async function buildWorld(map, scene, onProgress = () => {}) {
+export async function buildWorld(map, scene, onProgress = () => {}, renderer) {
+  if (map.mesh) { const { buildRealWorld } = await import('./realworld.js'); return buildRealWorld(map, scene, onProgress, renderer); }
   const faces = buildFaces(map);
   const atlasH = layoutLightmaps(faces);
   const AH = Math.max(4, atlasH);
@@ -290,6 +291,7 @@ export async function buildWorld(map, scene, onProgress = () => {}) {
   }
 
   buildDecor(map, group);
+  buildDressing(map, group, faces, makeLighter(map));
 
   for (const site of ['A', 'B']) {
     const c = map.siteCenter[site];
@@ -488,6 +490,177 @@ function buildDecor(map, group) {
     const mesh = new THREE.Mesh(mergeInto(list), material);
     mesh.matrixAutoUpdate = false;
     group.add(mesh);
+  }
+}
+
+// Wall details and rooftop clutter for maps that list them. Tinted with the same baked light as the walls, no collision.
+const DIRS = { n: [0, 0, -1], s: [0, 0, 1], e: [1, 0, 0], w: [-1, 0, 0] };
+function buildDressing(map, group, faces, light) {
+  if (!(map.decor || []).some(o => o.t === 'decal' || o.t === 'skyline')) return;
+  const sets = {};   // material key -> { pos, uv, col, opts }
+  const set = (key, opts = {}) => (sets[key] ||= { pos: [], uv: [], col: [], opts });
+  const quad = (key, a, b, c, e, col, opts, uvs = [0, 0, 1, 0, 1, 1, 0, 1]) => {
+    const s = set(key, opts), P = [a, b, c, a, c, e], I = [0, 1, 2, 0, 2, 3];
+    P.forEach((p, k) => { s.pos.push(...p); s.uv.push(uvs[I[k] * 2], uvs[I[k] * 2 + 1]); s.col.push(...col); });
+  };
+  const box = (key, mn, mx, col, opts, repeat = 1) => {
+    const [x0, y0, z0] = mn, [x1, y1, z1] = mx;
+    const shade = (k) => col.map(v => v * k), R = repeat, side = [0, 0, R, 0, R, 1, 0, 1];
+    quad(key, [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], shade(1), opts, side);
+    quad(key, [x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], shade(0.8), opts, side);
+    quad(key, [x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], shade(0.9), opts, side);
+    quad(key, [x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], shade(0.72), opts, side);
+    quad(key, [x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], shade(1.1), opts, side);
+  };
+  const lit = (x, y, z, n = [0, 1, 0]) => light([x, y, z], n);
+  const lines = [];
+
+  // cornices: two stone bands along the top of every exposed wall, the main thing that makes a block read as a building
+  for (const f of faces) {
+    const b = map.brushes[f.brush];
+    if (!b.flags.wall || Math.abs(f.n[1]) > 0.01) continue;
+    // the face's top edge, at any angle: the two highest corners furthest apart
+    const top = Math.max(...f.verts.map(v => v[1]));
+    if (top < b.max[1] - 0.01) continue;
+    const high = f.verts.filter(v => v[1] > top - 0.01);
+    let a = null, e = null, far = 0.3;
+    for (const p of high) for (const q of high) { const l = Math.hypot(q[0] - p[0], q[2] - p[2]); if (l > far) { far = l; a = p; e = q; } }
+    if (!a) continue;
+    // wind the band so it faces out along the wall's normal
+    if ((e[0] - a[0]) * f.n[2] - (e[2] - a[2]) * f.n[0] > 0) [a, e] = [e, a];
+    const nx = f.n[0], nz = f.n[2], col = lit((a[0] + e[0]) / 2 + nx * 0.3, top - 0.3, (a[2] + e[2]) / 2 + nz * 0.3, f.n);
+    const R = Math.max(1, Math.round(far / 3.6)), uv = [0, 0, R, 0, R, 0.3, 0, 0.3];
+    for (const [y0, y1, dp] of [[top - 0.32, top + 0.04, 0.2], [top - 0.62, top - 0.5, 0.09]]) {
+      const P = (s, y, o) => [s[0] + nx * o, y, s[2] + nz * o];
+      quad('sandstone', P(a, y0, dp), P(e, y0, dp), P(e, y1, dp), P(a, y1, dp), col, {}, uv);
+      quad('sandstone', P(a, y1, 0), P(a, y1, dp), P(e, y1, dp), P(e, y1, 0), col.map(v => v * 1.1), {}, uv);
+      quad('sandstone', P(e, y0, 0), P(e, y0, dp), P(a, y0, dp), P(a, y0, 0), col.map(v => v * 0.55), {}, uv);
+    }
+  }
+
+  for (const o of map.decor) {
+    if (o.t === 'decal') {
+      const dir = DIRS[o.dir], from = [o.x, o.y, o.z];
+      const tr = trace(map, from, [o.x + dir[0] * 25, o.y, o.z + dir[2] * 25], [0, 0, 0]);
+      if (tr.fraction >= 1 || tr.startsolid) { console.warn('decal has no wall', o.tex, o.x, o.z); continue; }
+      const n = tr.normal, p = [tr.end[0] + n[0] * 0.025, tr.end[1], tr.end[2] + n[2] * 0.025];
+      const r = [n[2] * o.w / 2, 0, -n[0] * o.w / 2];   // to the viewer's right, seen from in front of the wall
+      const col = lit(p[0] + n[0] * 0.08, p[1], p[2] + n[2] * 0.08, n);
+      const h = o.h / 2, k = { transparent: true };
+      quad(o.tex, [p[0] - r[0], p[1] - h, p[2] - r[2]], [p[0] + r[0], p[1] - h, p[2] + r[2]], [p[0] + r[0], p[1] + h, p[2] + r[2]], [p[0] - r[0], p[1] + h, p[2] - r[2]], col, k);
+    } else if (o.t === 'antenna') {
+      const c = [0.32, 0.3, 0.28], X = Math.cos(o.ry), Z = Math.sin(o.ry);
+      box('roofmetal', [o.x - 0.025, o.y, o.z - 0.025], [o.x + 0.025, o.y + 3.2, o.z + 0.025], c);
+      for (let k = 0; k < 4; k++) {
+        const y = o.y + 2 + k * 0.38, L = 1.1 - k * 0.2;
+        lines.push(o.x - X * L, y, o.z - Z * L, o.x + X * L, y, o.z + Z * L);
+      }
+    } else if (o.t === 'dish') {
+      const c = lit(o.x, o.y + 2, o.z), s = set('dish', {});
+      box('roofmetal', [o.x - 0.03, o.y, o.z - 0.03], [o.x + 0.03, o.y + 1, o.z + 0.03], [0.3, 0.3, 0.3]);
+      const R = 0.75, cx = o.x + Math.cos(o.ry) * 0.1, cz = o.z + Math.sin(o.ry) * 0.1, ax = -Math.sin(o.ry), az = Math.cos(o.ry);
+      for (let k = 0; k < 16; k++) {
+        const a0 = k / 16 * 6.283, a1 = (k + 1) / 16 * 6.283;
+        const pt = (a) => [cx + ax * Math.cos(a) * R + Math.cos(o.ry) * 0.2, o.y + 1.2 + Math.sin(a) * R, cz + az * Math.cos(a) * R + Math.sin(o.ry) * 0.2];
+        for (const v of [[cx, o.y + 1.2, cz], pt(a0), pt(a1)]) { s.pos.push(...v); s.uv.push(0, 0); s.col.push(c[0] * 0.75, c[1] * 0.75, c[2] * 0.75); }
+      }
+    } else if (o.t === 'wire') {
+      const N = 12;
+      let prev = o.a;
+      for (let k = 1; k <= N; k++) {
+        const t = k / N, q = [o.a[0] + (o.b[0] - o.a[0]) * t, o.a[1] + (o.b[1] - o.a[1]) * t - Math.sin(t * Math.PI) * 0.7, o.a[2] + (o.b[2] - o.a[2]) * t];
+        lines.push(...prev, ...q);
+        prev = q;
+      }
+    } else if (o.t === 'palm2') {
+      const base = o.y ?? floorAt(map, o.x + 0.5, o.z + 0.5);
+      if (isNaN(base)) continue;
+      const H = o.h || 6.5, x = o.x + 0.5, z = o.z + 0.5, trunk = lit(x + 0.4, base + H / 2, z, [0.7, 0.7, 0]);
+      const seg = 5;
+      for (let k = 0; k < seg; k++) {
+        const w0 = 0.2 - k * 0.018, off = k * 0.07, y0 = base + k * H / seg;
+        box('bark', [x + off - w0, y0, z - w0], [x + off + w0, y0 + H / seg, z + w0], trunk.map(v => v * 0.85));
+      }
+      const top = [x + seg * 0.07, base + H, z], c = lit(top[0], top[1] + 1, top[2]);
+      for (let k = 0; k < 14; k++) {
+        const a = k / 14 * 6.283 + (k % 2) * 0.2, L = 3 + (k % 3) * 0.35, W = 0.62, up = k % 2 ? 0.55 : 0.2;
+        const dx = Math.cos(a), dz = Math.sin(a), sx = -dz * W, sz = dx * W, S = 5;
+        // a frond: strip that rises, then droops under its own weight
+        const pt = (t, side) => [top[0] + dx * L * t + sx * side, top[1] + up * L * t - 1.25 * L * 0.5 * t * t, top[2] + dz * L * t + sz * side];
+        for (let s = 0; s < S; s++) {
+          const t0 = s / S, t1 = (s + 1) / S, tone = c.map((v, ci) => v * [0.26, 0.42, 0.17][ci] * (1 - (k % 3) * 0.1));
+          quad('frond', pt(t0, -1), pt(t0, 1), pt(t1, 1), pt(t1, -1), tone, { transparent: true, double: true }, [0, t0, 1, t0, 1, t1, 0, t1]);
+        }
+      }
+    } else if (o.t === 'scaffold') {
+      const c = lit(o.x - 0.5, o.y0 + 2, (o.z1 + o.z2) / 2, [-1, 0, 0]), w = [c[0] * 0.8, c[1] * 0.8, c[2] * 0.8];
+      for (let z = o.z1; z <= o.z2 + 0.01; z += (o.z2 - o.z1) / 2) box('wood_old', [o.x - 0.05, o.y0, z - 0.05], [o.x + 0.05, o.y0 + o.h, z + 0.05], w, {}, 2);
+      for (let y = o.y0 + 1.5; y < o.y0 + o.h; y += 1.5) {
+        box('wood_old', [o.x - 0.05, y, o.z1], [o.x + 0.05, y + 0.1, o.z2], w, {}, 2);
+        box('wood_old', [o.x - 0.5, y - 0.04, o.z1], [o.x, y, o.z2], w, {}, 2);
+      }
+    } else if (o.t === 'merlons') {
+      const c = lit(o.x1 - 0.5, o.y, o.z1 - 0.5);
+      for (const [a, b, fixed, along] of [[o.x1, o.x2, o.z1, 'x'], [o.x1, o.x2, o.z2 - 0.5, 'x'], [o.z1, o.z2, o.x1, 'z'], [o.z1, o.z2, o.x2 - 0.5, 'z']])
+        for (let s = a; s < b; s += 1.3) along === 'x'
+          ? box('sandstone', [s, o.y, fixed], [Math.min(b, s + 0.7), o.y + 0.9, fixed + 0.5], c)
+          : box('sandstone', [fixed, o.y, s], [fixed + 0.5, o.y + 0.9, Math.min(b, s + 0.7)], c);
+    } else if (o.t === 'tower') {
+      const c = [1.15, 1.02, 0.86], { x, z, base: y0, h, w } = o, H = w / 2;
+      box('sandstone', [x - H, y0, z - H], [x + H, y0 + h, z + H], c, {}, 4);
+      box('sandstone', [x - H - 0.25, y0 + h * 0.62, z - H - 0.25], [x + H + 0.25, y0 + h * 0.65, z + H + 0.25], c);
+      box('sandstone', [x - H * 0.62, y0 + h, z - H * 0.62], [x + H * 0.62, y0 + h + 3, z + H * 0.62], c, {}, 2);
+      for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) box('sandstone', [x + dx * H - 0.35, y0 + h, z + dz * H - 0.35], [x + dx * H + 0.35, y0 + h + 1.2, z + dz * H + 0.35], c);
+      for (const f of [-0.45, 0, 0.45]) for (const [yy, hh] of [[0.72, 2.6], [0.45, 1.8]]) {
+        const a = y0 + h * yy, W = 0.6, kk = { transparent: true };
+        quad('win_arch', [x + f * w - W, a, z + H + 0.03], [x + f * w + W, a, z + H + 0.03], [x + f * w + W, a + hh, z + H + 0.03], [x + f * w - W, a + hh, z + H + 0.03], [0.35, 0.3, 0.28], kk);
+        quad('win_arch', [x + H + 0.03, a, z + f * w + W], [x + H + 0.03, a, z + f * w - W], [x + H + 0.03, a + hh, z + f * w - W], [x + H + 0.03, a + hh, z + f * w + W], [0.35, 0.3, 0.28], kk);
+      }
+    } else if (o.t === 'skyline') {
+      // a hazy white town beyond the walls on every side; simple boxes that the fog softens
+      let seed = 7;
+      const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+      for (let k = 0; k < 90; k++) {
+        const a = rnd() * 6.283, R = 72 + rnd() * 55, x = map.w / 2 + Math.cos(a) * R, z = map.h / 2 + Math.sin(a) * R, sx = 4 + rnd() * 9, sz = 4 + rnd() * 9, h = 12 + rnd() * rnd() * 34;
+        box('plaster_cream', [x - sx, 0, z - sz], [x + sx, h, z + sz], [1.3, 1.26, 1.2], {}, 2);
+      }
+    } else if (o.t === 'tarp') {
+      const g = new THREE.PlaneGeometry(o.x2 - o.x1, o.z2 - o.z1, 24, 24);
+      g.rotateX(-Math.PI / 2);
+      const p = g.attributes.position, cc = [];
+      for (let i = 0; i < p.count; i++) {
+        const u = p.getX(i), v = p.getZ(i), edge = Math.min(1, Math.min(Math.abs(Math.abs(u) - (o.x2 - o.x1) / 2), Math.abs(Math.abs(v) - (o.z2 - o.z1) / 2)) / 1.4);
+        const sag = (Math.sin(u * 1.3 + 0.7) * Math.cos(v * 1.1) * 0.22 + Math.sin(u * 3.1 + v * 2.3) * 0.06) * edge - 0.3 * edge;
+        p.setY(i, sag);
+        const s = 1 + sag * 1.2;
+        cc.push(1.45 * s, 1.5 * s, 1.3 * s);
+      }
+      g.setAttribute('color', new THREE.Float32BufferAttribute(cc, 3));
+      g.translate((o.x1 + o.x2) / 2, o.y, (o.z1 + o.z2) / 2);
+      const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map: surfaceTexture('cloth_green'), vertexColors: true, side: THREE.DoubleSide }));
+      m.matrixAutoUpdate = false;
+      group.add(m);
+    }
+  }
+  for (const [key, s] of Object.entries(sets)) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(s.pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(s.uv, 2));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(s.col, 3));
+    g.computeBoundingSphere();
+    const plain = key === 'roofmetal' || key === 'dish';
+    const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: key === 'dish' || s.opts.double ? THREE.DoubleSide : THREE.FrontSide, ...(plain ? {} : { map: surfaceTexture(key) }), ...(s.opts.transparent ? { alphaTest: 0.35, polygonOffset: true, polygonOffsetFactor: -2 } : {}) });
+    if (key === 'dish') mat.color.setRGB(0.9, 0.9, 0.88);
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.matrixAutoUpdate = false;
+    group.add(mesh);
+  }
+  if (lines.length) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+    const l = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x24211d }));
+    l.matrixAutoUpdate = false;
+    group.add(l);
   }
 }
 

@@ -3,6 +3,9 @@
 import { getMap, MAP_IDS } from '../shared/maps.js';
 import { findPath, walkClear, zoneSpots } from '../shared/nav.js';
 import { moveBody, groundHeight, JUMP_V } from '../shared/physics.js';
+import { loadRealMaps } from '../shared/realmaps-fs.js';
+
+loadRealMaps();
 
 let bad = 0;
 for (const id of MAP_IDS) {

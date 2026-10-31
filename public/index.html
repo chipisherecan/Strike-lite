@@ -170,15 +170,18 @@
       <button data-edtool="decor" title="D">Decor<small>D</small></button>
       <button data-edtool="light" title="L">Light<small>L</small></button>
     </div>
-    <div class="ed-view"><canvas id="ed-canvas"></canvas><div id="ed-3dview" class="hidden"></div></div>
+    <div class="ed-view"><canvas id="ed-canvas"></canvas><div id="ed-3dview" class="hidden"></div><div id="ed-modes" class="hidden"><button data-edmode="move" class="on">Move<small>1</small></button><button data-edmode="resize">Resize<small>2</small></button></div></div>
     <div class="ed-props" id="ed-props"></div>
   </div>
   <div class="ed-foot" id="ed-info"></div>
   <div id="ed-helpbox" class="hidden">
     <h3>How to edit maps</h3>
-    <p>Maps are built from <b>brushes</b> (solid boxes and ramps), like CS 1.6 maps in Hammer. The view is from above: up on the screen is north.</p>
+    <p>Maps are built from <b>brushes</b> (solid boxes and ramps), like CS 1.6 maps in Hammer. The editor opens in 3D; the <b>Top-down 2D</b> button switches to the view from above, where up on the screen is north.</p>
     <ul>
-      <li><b>Move the view:</b> right-drag to pan, mouse wheel to zoom.</li>
+      <li><b>3D view:</b> hold the right mouse button to look, with WASD to fly, Q/E down/up, Shift fast. Wheel moves forward and back, middle-drag pans, <b>F</b> goes to the selection.</li>
+      <li><b>Select in 3D:</b> click a part. Floors made of several pieces select whole; Alt+click takes one piece, Shift+click adds more.</li>
+      <li><b>Move (1):</b> drag an arrow, or a square between arrows. <b>Resize (2):</b> drag a yellow square to move that side, including the top and bottom. Both follow the grid snap; hold Shift to ignore it.</li>
+      <li><b>2D view:</b> right-drag to pan, mouse wheel to zoom.</li>
       <li><b>Select (S):</b> click a brush, Shift+click for more, drag on empty space to box-select. Drag to move, drag the yellow squares to resize. Arrow keys nudge, Page Up/Down raise/lower.</li>
       <li><b>Box (B):</b> pick a preset (wall, floor/platform, crate, roof), set bottom/top heights and textures, then drag a rectangle.</li>
       <li><b>Ramp (R):</b> set the low and high heights and which way it rises, then drag a rectangle. Use ramps for stairs and slopes.</li>

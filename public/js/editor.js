@@ -1,11 +1,8 @@
 // In-game map editor, Hammer/Worldcraft style: maps are lists of brushes (boxes and ramps) edited in a
-// top-down 2D view, with a live 3D preview. Saved maps are written by the server into shared/mapdata/edits.js.
-import * as THREE from 'three';
+// 3D view (editor3d.js) or a top-down 2D view. Saved maps are written by the server into shared/mapdata/edits.js.
 import { MAP_INFO, MATS, getMapSource, getOriginalSource, getRadarInfo, getTheme, buildWorldFromSource, isEdited } from '/shared/maps.js';
-import { brushPolygons } from '/shared/brush.js';
-import { makeBrushFromSource } from '/shared/maps.js';
 import { findPath } from '/shared/nav.js';
-import { surfaceTexture, TEX_SCALE } from './textures.js';
+import { View3D, scaleBrush } from './editor3d.js';
 
 const $ = (id) => document.getElementById(id);
 const TEXTURES = [...MATS, 'nodraw'];
@@ -52,6 +49,7 @@ export class Editor {
     this.loadRadar();
     this.applyPreset(this.opts.preset);
     this.renderProps();
+    this.open3D();
     this.status(isEdited(mapId) ? 'Editing your saved version of this map.' : 'Editing the original map. Save to keep your changes.');
     fetch('/api/editor-status').then(r => r.json()).then(j => { this.canSave = j.canSave; if (!j.canSave) this.status('Viewing only: maps can only be saved on the PC that runs the server.', true); }).catch(() => {});
     this.draw();
@@ -77,6 +75,10 @@ export class Editor {
 
   // ------------------------------------------------------------ brush helpers
   bounds(b) {
+    if (b.t === 'prism') {
+      const xs = b.pts.map(p => p[0]), zs = b.pts.map(p => p[1]);
+      return { x0: Math.min(...xs), z0: Math.min(...zs), x1: Math.max(...xs), z1: Math.max(...zs), bottom: b.bottom, top: b.top, low: b.top };
+    }
     if (b.t === 'slope') {
       const tops = [[b.x0, b.z0], [b.x1, b.z0], [b.x0, b.z1], [b.x1, b.z1]].map(([x, z]) => b.a + b.sx * x + b.sz * z);
       return { x0: b.x0, z0: b.z0, x1: b.x1, z1: b.z1, bottom: b.bottom, top: Math.max(...tops), low: Math.min(...tops) };
@@ -84,12 +86,21 @@ export class Editor {
     return { x0: b.min[0], z0: b.min[2], x1: b.max[0], z1: b.max[2], bottom: b.min[1], top: b.max[1], low: b.max[1] };
   }
   move(b, dx, dy, dz) {
-    if (b.t === 'slope') { b.x0 += dx; b.x1 += dx; b.z0 += dz; b.z1 += dz; b.bottom += dy; b.a += dy - b.sx * dx - b.sz * dz; }
+    if (b.t === 'prism') {
+      for (const p of b.pts) { p[0] += dx; p[1] += dz; }
+      b.bottom += dy; b.top += dy;
+      if (b.plane) b.plane.a += dy - b.plane.sx * dx - b.plane.sz * dz;
+    } else if (b.t === 'slope') { b.x0 += dx; b.x1 += dx; b.z0 += dz; b.z1 += dz; b.bottom += dy; b.a += dy - b.sx * dx - b.sz * dz; }
     else { b.min[0] += dx; b.max[0] += dx; b.min[1] += dy; b.max[1] += dy; b.min[2] += dz; b.max[2] += dz; }
   }
   setFootprint(b, x0, z0, x1, z1) {
     if (x1 - x0 < 0.1 || z1 - z0 < 0.1) return;
-    if (b.t === 'slope') { b.x0 = x0; b.z0 = z0; b.x1 = x1; b.z1 = z1; }
+    if (b.t === 'prism') {
+      const k = this.bounds(b);
+      scaleBrush(b, [1, 0], [k.x0, 0, k.z0], (x1 - x0) / (k.x1 - k.x0));
+      scaleBrush(b, [0, 1], [k.x0, 0, k.z0], (z1 - z0) / (k.z1 - k.z0));
+      this.move(b, x0 - k.x0, 0, z0 - k.z0);
+    } else if (b.t === 'slope') { b.x0 = x0; b.z0 = z0; b.x1 = x1; b.z1 = z1; }
     else { b.min[0] = x0; b.min[2] = z0; b.max[0] = x1; b.max[2] = z1; }
   }
   slopeParams(b) {
@@ -127,7 +138,11 @@ export class Editor {
     this.sel.clear(); this.selDecor = -1;
     this.changed();
   }
-  changed() { this.renderProps(); this.draw(); if (this.view3d) this.rebuild3D(); }
+  changed() {
+    if (this.view3d) for (const i of this.sel) if (this.src.brushes[i]) this.view3d.invalidate(this.src.brushes[i]);
+    this.renderProps(); this.draw();
+    if (this.view3d) this.view3d.rebuild();
+  }
 
   // ------------------------------------------------------------ coordinates
   toWorld(px, py) { return { x: this.view.x + px / this.view.s, z: this.view.z + py / this.view.s }; }
@@ -153,6 +168,7 @@ export class Editor {
   }
   // Height of the walkable floor at (x, z): the highest non-wall, non-roof brush there.
   floorUnder(x, z) {
+    if (this.view3d) return this.view3d.floorAt(x, z);
     let best = -Infinity;
     for (const b of this.src.brushes) {
       if (b.roof || b.wall) continue;
@@ -161,6 +177,18 @@ export class Editor {
       best = Math.max(best, b.t === 'slope' ? b.a + b.sx * x + b.sz * z : k.top);
     }
     return isFinite(best) ? best : 0;
+  }
+
+  // Selects what was clicked, the whole named part unless `single` (Alt) is held.
+  pickPart(i, add, single) {
+    this.selDecor = -1;
+    if (i < 0) { if (!add) this.sel.clear(); this.renderProps(); return; }
+    const name = this.src.brushes[i].group, part = [];
+    if (name && !single) this.src.brushes.forEach((b, n) => { if (b.group === name) part.push(n); }); else part.push(i);
+    if (!add) this.sel.clear();
+    const off = add && this.sel.has(i);
+    for (const n of part) if (off) this.sel.delete(n); else this.sel.add(n);
+    this.renderProps();
   }
 
   pickDecor(x, z) {
@@ -197,6 +225,7 @@ export class Editor {
   }
 
   draw() {
+    if (this.view3d) return;
     const g = this.g, W = this.canvas.width, H = this.canvas.height, s = this.view.s;
     g.fillStyle = '#111316'; g.fillRect(0, 0, W, H);
     // radar underlay
@@ -329,8 +358,7 @@ export class Editor {
       const bi = this.pick(p.x, p.z);
       this.selDecor = -1;
       if (bi >= 0) {
-        if (e.shiftKey) { if (this.sel.has(bi)) this.sel.delete(bi); else this.sel.add(bi); }
-        else if (!this.sel.has(bi)) { this.sel.clear(); this.sel.add(bi); }
+        if (e.shiftKey || !this.sel.has(bi)) this.pickPart(bi, e.shiftKey, e.altKey);
         this.snapshot();
         this.drag = { move: true, lx: sx, lz: sz, moved: false };
       } else {
@@ -340,26 +368,38 @@ export class Editor {
       this.renderProps(); this.draw();
       return;
     }
-    if (this.tool === 'decor' && this.opts.decor !== 'doors' && this.opts.decor !== 'awning') {
-      this.snapshot();
-      this.src.decor = this.src.decor || [];
-      this.src.decor.push({ t: this.opts.decor, x: Math.floor(p.x), z: Math.floor(p.z) });
-      this.changed();
-      return;
-    }
-    if (this.tool === 'light') {
-      this.snapshot();
-      this.src.lights = this.src.lights || [];
-      this.src.lights.push({ x: sx, z: sz, color: [1, 0.85, 0.6], radius: this.opts.lightRadius, intensity: 1.4 });
-      this.changed();
-      return;
-    }
+    if (this.placeAt(p.x, p.z)) return;
     // rectangle tools: box, ramp, zone, doors, awning
     this.drag = { rect: { x0: sx, z0: sz, x1: sx, z1: sz } };
   }
 
+  // Click-to-place tools. Returns false for tools that drag a rectangle instead.
+  placeAt(x, z) {
+    if (this.tool === 'decor' && this.opts.decor !== 'doors' && this.opts.decor !== 'awning') {
+      this.snapshot();
+      this.src.decor = this.src.decor || [];
+      this.src.decor.push({ t: this.opts.decor, x: Math.floor(x), z: Math.floor(z) });
+      this.changed();
+      return true;
+    }
+    if (this.tool === 'light') {
+      this.snapshot();
+      this.src.lights = this.src.lights || [];
+      this.src.lights.push({ x: this.snap(x), z: this.snap(z), color: [1, 0.85, 0.6], radius: this.opts.lightRadius, intensity: 1.4 });
+      this.changed();
+      return true;
+    }
+    return false;
+  }
+
+  moveDecor(o, dx, dz) {
+    if (o.t === 'doors') { if (o.axis === 'x') { o.a += dx; o.b += dx; o.at += dz; } else { o.a += dz; o.b += dz; o.at += dx; } }
+    else if (o.t === 'awning') { o.x1 += dx; o.x2 += dx; o.z1 += dz; o.z2 += dz; }
+    else { o.x += dx; o.z += dz; }
+  }
+
   onMove(e) {
-    if ($('editor').classList.contains('hidden')) return;
+    if (this.view3d || $('editor').classList.contains('hidden')) return;
     const p = this.evPos(e);
     const info = $('ed-info');
     const bi = this.pick(p.x, p.z);
@@ -379,10 +419,7 @@ export class Editor {
     if (d.decor !== undefined) {
       const dx = sx - d.lx, dz = sz - d.lz;
       if (dx || dz) {
-        const o = this.src.decor[d.decor];
-        if (o.t === 'doors') { if (o.axis === 'x') { o.a += dx; o.b += dx; o.at += dz; } else { o.a += dz; o.b += dz; o.at += dx; } }
-        else if (o.t === 'awning') { o.x1 += dx; o.x2 += dx; o.z1 += dz; o.z2 += dz; }
-        else { o.x += dx; o.z += dz; }
+        this.moveDecor(this.src.decor[d.decor], dx, dz);
         d.lx = sx; d.lz = sz; this.draw();
       }
       return;
@@ -415,6 +452,12 @@ export class Editor {
       this.renderProps(); this.draw();
       return;
     }
+    this.finishRect(r);
+  }
+
+  // Creates what a rectangle tool drew. `base` is the height of the surface it was drawn on in the 3D view.
+  finishRect(r, base) {
+    const x0 = Math.min(r.x0, r.x1), x1 = Math.max(r.x0, r.x1), z0 = Math.min(r.z0, r.z1), z1 = Math.max(r.z0, r.z1);
     if (this.tool === 'decor') {
       if (Math.max(x1 - x0, z1 - z0) < 0.5) { this.draw(); return; }
       this.snapshot();
@@ -439,13 +482,14 @@ export class Editor {
       if (this.opts.preset === 'crate' || this.opts.preset === 'roof') {
         const floor = this.floorUnder((x0 + x1) / 2, (z0 + z1) / 2);
         bottom += floor; top += floor;
-      }
+      } else if (base !== undefined && this.opts.preset !== 'custom') { bottom += base; top += base; }
       const b = { t: 'box', min: [x0, bottom, z0], max: [x1, top, z1], tex: { top: this.opts.texTop, side: this.opts.texSide, bottom: pr.flags.roof ? this.theme.ceil : 'nodraw' } };
       Object.assign(b, pr.flags);
       this.src.brushes.push(b);
       this.sel.clear(); this.sel.add(this.src.brushes.length - 1);
     } else if (this.tool === 'ramp') {
-      const b = this.makeSlope(x0, z0, x1, z1, Math.min(this.opts.rampLow, this.opts.rampHigh) - 1, this.opts.rampLow, this.opts.rampHigh, this.opts.rampDir, { top: this.opts.texTop, side: this.opts.texSide, bottom: 'nodraw' });
+      const up = base || 0;
+      const b = this.makeSlope(x0, z0, x1, z1, Math.min(this.opts.rampLow, this.opts.rampHigh) - 1 + up, this.opts.rampLow + up, this.opts.rampHigh + up, this.opts.rampDir, { top: this.opts.texTop, side: this.opts.texSide, bottom: 'nodraw' });
       this.src.brushes.push(b);
       this.sel.clear(); this.sel.add(this.src.brushes.length - 1);
     }
@@ -454,14 +498,19 @@ export class Editor {
 
   // ------------------------------------------------------------ keyboard
   onKey(e) {
-    if ($('editor').classList.contains('hidden') || this.view3d && this.view3d.locked) return;
+    if ($('editor').classList.contains('hidden') || (this.view3d && this.view3d.flyKey(e))) return;
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
     const k = e.key.toLowerCase();
+    if (this.view3d && !e.ctrlKey) {
+      if (k === '1') return this.view3d.setMode('move');
+      if (k === '2') return this.view3d.setMode('resize');
+      if (k === 'f') return this.view3d.focus();
+    }
     if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); this.restore(this.undoStack, this.redoStack); return; }
     if ((e.ctrlKey || e.metaKey) && (k === 'y' || (e.shiftKey && k === 'z'))) { e.preventDefault(); this.restore(this.redoStack, this.undoStack); return; }
     if ((e.ctrlKey || e.metaKey) && k === 'd') { e.preventDefault(); this.duplicate(); return; }
     if (k === 'delete' || k === 'backspace') { e.preventDefault(); this.deleteSel(); return; }
-    if (k === 'escape') { this.sel.clear(); this.selDecor = -1; this.renderProps(); this.draw(); return; }
+    if (k === 'escape') { this.sel.clear(); this.selDecor = -1; this.renderProps(); this.draw(); if (this.view3d) this.view3d.rebuild(); return; }
     const nudge = { arrowleft: [-1, 0, 0], arrowright: [1, 0, 0], arrowup: [0, 0, -1], arrowdown: [0, 0, 1], pageup: [0, 1, 0], pagedown: [0, -1, 0] }[k];
     if (nudge && this.sel.size) {
       e.preventDefault();
@@ -487,9 +536,9 @@ export class Editor {
   duplicate() {
     if (!this.sel.size) return;
     this.snapshot();
-    const copies = [...this.sel].map(i => structuredClone(this.src.brushes[i]));
+    const copies = [...this.sel].map(i => structuredClone(this.src.brushes[i])), stamp = Date.now().toString(36);
     this.sel.clear();
-    for (const c of copies) { this.move(c, this.opts.snap * 2, 0, this.opts.snap * 2); this.src.brushes.push(c); this.sel.add(this.src.brushes.length - 1); }
+    for (const c of copies) { if (c.group) c.group = c.group.split('~')[0] + '~' + stamp; this.move(c, this.opts.snap * 2, 0, this.opts.snap * 2); this.src.brushes.push(c); this.sel.add(this.src.brushes.length - 1); }
     this.changed();
   }
 
@@ -524,7 +573,7 @@ export class Editor {
       h += `<label>Preset <select id="ep-preset">${Object.entries(PRESETS).map(([k, p]) => `<option value="${k}" ${k === o.preset ? 'selected' : ''}>${p.label}</option>`).join('')}</select></label>`;
       h += `<div class="ep-row"><label>Bottom ${num('ep-bottom', o.bottom)}</label><label>Top ${num('ep-top', o.top)}</label></div>`;
       h += `<label>Top texture ${texSel('ep-textop', o.texTop)}</label><label>Side texture ${texSel('ep-texside', o.texSide)}</label>`;
-      h += '<p class="hint">Drag a rectangle in the 2D view to create the brush.</p>';
+      h += '<p class="hint">Drag a rectangle to create the brush. In 3D it starts on the surface you drag from.</p>';
     } else if (this.tool === 'ramp') {
       h += `<div class="ep-row"><label>Low end ${num('ep-low', o.rampLow)}</label><label>High end ${num('ep-high', o.rampHigh)}</label></div>`;
       h += `<label>Rises towards <select id="ep-dir">${['N', 'E', 'S', 'W'].map(d => `<option ${d === o.rampDir ? 'selected' : ''}>${d}</option>`).join('')}</select></label>`;
@@ -540,7 +589,7 @@ export class Editor {
     } else if (this.tool === 'light') {
       h += `<label>Radius ${num('ep-lightr', o.lightRadius, 0.5)}</label><p class="hint">Click to add a light (baked into the lightmaps). Select a light by deleting/re-adding for now.</p>`;
     } else {
-      h += '<p class="hint">Click a brush to select it. Shift+click adds to the selection, drag on empty space to box-select. Drag to move, drag the square handles to resize.</p>';
+      h += (this.view3d ? '<p class="hint">Click a part to select it, Shift+click for more, Alt+click for one piece of a part. <b>1</b> Move: drag the arrows. <b>2</b> Resize: drag a yellow square. Hold Shift to ignore the grid. <b>F</b> goes to the selection.</p>' : '<p class="hint">Click a brush to select it. Shift+click adds to the selection, drag on empty space to box-select. Drag to move, drag the square handles to resize.</p>');
     }
     // selection
     if (this.selDecor >= 0) {
@@ -555,7 +604,8 @@ export class Editor {
         const b = list[0], k = this.bounds(b);
         h += `<div class="ep-row"><label>X from ${num('es-x0', k.x0)}</label><label>to ${num('es-x1', k.x1)}</label></div>`;
         h += `<div class="ep-row"><label>Z from ${num('es-z0', k.z0)}</label><label>to ${num('es-z1', k.z1)}</label></div>`;
-        if (b.t === 'box') h += `<div class="ep-row"><label>Bottom ${num('es-bottom', k.bottom)}</label><label>Top ${num('es-top', k.top)}</label></div>`;
+        if (b.t === 'box' || (b.t === 'prism' && !b.plane)) h += `<div class="ep-row"><label>Bottom ${num('es-bottom', k.bottom)}</label><label>Top ${num('es-top', k.top)}</label></div>`;
+        else if (b.t === 'prism') h += `<div class="ep-row"><label>Bottom ${num('es-bottom', k.bottom)}</label></div>`;
         else {
           const sp = this.slopeParams(b);
           h += `<div class="ep-row"><label>Bottom ${num('es-bottom', k.bottom)}</label></div>`;
@@ -578,7 +628,7 @@ export class Editor {
     const o = this.opts, on = (id, ev, fn) => { const e = $(id); if (e) e.addEventListener(ev, fn); };
     on('ep-snap', 'change', (e) => { o.snap = +e.target.value; });
     on('ep-radar', 'input', (e) => { o.radar = +e.target.value; this.draw(); });
-    on('ep-roofs', 'change', (e) => { o.roofs = e.target.checked; this.draw(); });
+    on('ep-roofs', 'change', (e) => { o.roofs = e.target.checked; this.draw(); if (this.view3d) this.view3d.rebuild(); });
     on('ep-preset', 'change', (e) => { this.applyPreset(e.target.value); this.renderProps(); });
     on('ep-bottom', 'change', (e) => { o.bottom = +e.target.value; o.preset = 'custom'; });
     on('ep-top', 'change', (e) => { o.top = +e.target.value; o.preset = 'custom'; });
@@ -600,7 +650,7 @@ export class Editor {
     const fp = () => edit((b) => this.setFootprint(b, val('es-x0'), val('es-z0'), val('es-x1'), val('es-z1')));
     for (const id of ['es-x0', 'es-x1', 'es-z0', 'es-z1']) on(id, 'change', fp);
     on('es-bottom', 'change', () => edit((b) => { if (b.t === 'box') b.min[1] = Math.min(val('es-bottom'), b.max[1] - 0.05); else b.bottom = val('es-bottom'); }));
-    on('es-top', 'change', () => edit((b) => { if (b.t === 'box') b.max[1] = Math.max(val('es-top'), b.min[1] + 0.05); }));
+    on('es-top', 'change', () => edit((b) => { if (b.t === 'box') b.max[1] = Math.max(val('es-top'), b.min[1] + 0.05); else if (b.t === 'prism') b.top = Math.max(val('es-top'), b.bottom + 0.05); }));
     const slope = () => edit((b) => { if (b.t === 'slope') this.setSlope(b, val('es-low'), val('es-high'), $('es-dir').value); });
     for (const id of ['es-low', 'es-high', 'es-dir']) on(id, 'change', slope);
     const tex = (part) => (e) => edit((b) => { b.tex = typeof b.tex === 'object' ? { ...b.tex } : { top: b.tex, side: b.tex, bottom: b.tex }; b.tex[part] = e.target.value; });
@@ -659,114 +709,22 @@ export class Editor {
     }
   }
 
-  // ------------------------------------------------------------ 3D preview (fly around)
+  // ------------------------------------------------------------ 3D view
   open3D() {
-    if (this.view3d) return this.close3D();
-    const host = $('ed-3dview');
-    host.classList.remove('hidden');
-    const renderer = new THREE.WebGLRenderer({ antialias: false });
-    renderer.setPixelRatio(Math.min(1, window.devicePixelRatio));
-    const r = host.getBoundingClientRect();
-    renderer.setSize(r.width, r.height);
-    host.appendChild(renderer.domElement);
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(this.theme.skyHorizon);
-    scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x6b5a45, 2.2));
-    const sun = new THREE.DirectionalLight(0xfff0d8, 2.4); sun.position.set(...this.theme.sun); scene.add(sun);
-    const cam = new THREE.PerspectiveCamera(75, r.width / r.height, 0.05, 400);
-    cam.rotation.order = 'YXZ';
-    const c = this.toWorld(this.canvas.width / 2, this.canvas.height / 2);
-    cam.position.set(c.x, 12, c.z + 12); cam.rotation.set(-0.6, 0, 0);
-    const v = this.view3d = { renderer, scene, cam, host, keys: new Set(), group: null, locked: false, yaw: 0, pitch: -0.6 };
-    const el = renderer.domElement;
-    el.addEventListener('click', () => el.requestPointerLock());
-    v.onLock = () => { v.locked = document.pointerLockElement === el; };
-    document.addEventListener('pointerlockchange', v.onLock);
-    v.onMouse = (e) => { if (!v.locked) return; v.yaw -= e.movementX * 0.0025; v.pitch = Math.max(-1.55, Math.min(1.55, v.pitch - e.movementY * 0.0025)); };
-    v.onKeyDown = (e) => { if (v.locked) { v.keys.add(e.code); e.preventDefault(); } };
-    v.onKeyUp = (e) => v.keys.delete(e.code);
-    document.addEventListener('mousemove', v.onMouse);
-    document.addEventListener('keydown', v.onKeyDown);
-    document.addEventListener('keyup', v.onKeyUp);
-    this.rebuild3D();
-    let last = performance.now();
-    const loop = (t) => {
-      if (this.view3d !== v) return;
-      const dt = Math.min(0.05, (t - last) / 1000); last = t;
-      const sp = (v.keys.has('ShiftLeft') ? 30 : 10) * dt;
-      const f = new THREE.Vector3(-Math.sin(v.yaw) * Math.cos(v.pitch), Math.sin(v.pitch), -Math.cos(v.yaw) * Math.cos(v.pitch));
-      const rgt = new THREE.Vector3(Math.cos(v.yaw), 0, -Math.sin(v.yaw));
-      if (v.keys.has('KeyW')) cam.position.addScaledVector(f, sp);
-      if (v.keys.has('KeyS')) cam.position.addScaledVector(f, -sp);
-      if (v.keys.has('KeyA')) cam.position.addScaledVector(rgt, -sp);
-      if (v.keys.has('KeyD')) cam.position.addScaledVector(rgt, sp);
-      if (v.keys.has('Space')) cam.position.y += sp;
-      if (v.keys.has('KeyC') || v.keys.has('ControlLeft')) cam.position.y -= sp;
-      cam.rotation.set(v.pitch, v.yaw, 0);
-      renderer.render(scene, cam);
-      requestAnimationFrame(loop);
-    };
-    requestAnimationFrame(loop);
-    $('ed-3d').textContent = 'Back to 2D';
-    this.status('3D preview: click it to look around, WASD to fly, Space/C up/down, Shift fast, Esc to release the mouse.');
-  }
-
-  rebuild3D() {
-    const v = this.view3d;
-    if (!v) return;
-    clearTimeout(v.timer);
-    v.timer = setTimeout(() => {
-      if (v.group) { v.scene.remove(v.group); v.group.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); }); }
-      const byTex = new Map();
-      for (const src of this.src.brushes) {
-        let b;
-        try { b = makeBrushFromSource(src); } catch { continue; }
-        for (const poly of brushPolygons(b)) {
-          const p = b.planes[poly.plane];
-          if (!p.tex || p.tex === 'nodraw') continue;
-          let g = byTex.get(p.tex);
-          if (!g) byTex.set(p.tex, g = { pos: [], nor: [], uv: [] });
-          const n = p.n, ax = Math.abs(n[0]), ay = Math.abs(n[1]), az = Math.abs(n[2]);
-          const u = ay >= ax && ay >= az ? [1, 0, 0] : ax >= az ? [0, 0, 1] : [1, 0, 0];
-          const vv = ay >= ax && ay >= az ? [0, 0, 1] : [0, -1, 0];
-          const sc = TEX_SCALE[p.tex] || 3;
-          const V = poly.verts;
-          // wind the fan so it faces along the plane normal
-          const cr = new THREE.Vector3().crossVectors(new THREE.Vector3(...V[1]).sub(new THREE.Vector3(...V[0])), new THREE.Vector3(...V[2]).sub(new THREE.Vector3(...V[0])));
-          const flip = cr.dot(new THREE.Vector3(...n)) < 0;
-          for (let k = 1; k + 1 < V.length; k++) for (const idx of flip ? [0, k + 1, k] : [0, k, k + 1]) {
-            const q = V[idx];
-            g.pos.push(...q); g.nor.push(...n);
-            g.uv.push((q[0] * u[0] + q[1] * u[1] + q[2] * u[2]) / sc, -(q[0] * vv[0] + q[1] * vv[1] + q[2] * vv[2]) / sc);
-          }
-        }
-      }
-      const group = new THREE.Group();
-      for (const [tex, g] of byTex) {
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.Float32BufferAttribute(g.pos, 3));
-        geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.nor, 3));
-        geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uv, 2));
-        group.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: surfaceTexture(tex) })));
-      }
-      v.group = group;
-      v.scene.add(group);
-    }, 120);
+    if (this.view3d) { this.close3D(); this.resize(); this.renderProps(); this.draw(); return; }
+    this.view3d = new View3D(this);
+    $('ed-modes').classList.remove('hidden');
+    $('ed-3d').textContent = 'Top-down 2D';
+    this.renderProps();
+    this.status('Hold the right mouse button to look, with WASD to fly and Q/E down/up. Wheel moves forward and back.');
   }
 
   close3D() {
     const v = this.view3d;
     if (!v) return;
     this.view3d = null;
-    document.removeEventListener('pointerlockchange', v.onLock);
-    document.removeEventListener('mousemove', v.onMouse);
-    document.removeEventListener('keydown', v.onKeyDown);
-    document.removeEventListener('keyup', v.onKeyUp);
-    if (document.pointerLockElement) document.exitPointerLock();
-    if (v.group) v.group.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
-    v.renderer.dispose();
-    v.host.innerHTML = '';
-    v.host.classList.add('hidden');
+    v.dispose();
+    $('ed-modes').classList.add('hidden');
     $('ed-3d').textContent = '3D view';
   }
 
@@ -788,10 +746,11 @@ export class Editor {
       this.dirty = false;
       this.close();
     };
+    document.querySelectorAll('[data-edmode]').forEach(b => b.onclick = () => this.view3d && this.view3d.setMode(b.dataset.edmode));
     $('ed-help').onclick = () => $('ed-helpbox').classList.toggle('hidden');
     document.querySelectorAll('[data-edtool]').forEach(b => b.onclick = () => this.setTool(b.dataset.edtool));
     window.addEventListener('keydown', (e) => this.onKey(e));
-    window.addEventListener('resize', () => { if (!$('editor').classList.contains('hidden')) { this.resize(); this.draw(); } });
+    window.addEventListener('resize', () => { if (!$('editor').classList.contains('hidden')) { this.resize(); this.draw(); if (this.view3d) this.view3d.resize(); } });
     this.bindCanvas();
   }
 }

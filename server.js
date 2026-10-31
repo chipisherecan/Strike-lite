@@ -10,13 +10,16 @@ import { WebSocketServer } from 'ws';
 import { getMap, MAP_INFO, MAP_IDS, CELL, Z_A, Z_B, zoneAt, setMapEdit, getAllEdits } from './shared/maps.js';
 import { findPath as navFindPath, walkClear, zoneSpots, getNav, nearestNode } from './shared/nav.js';
 import * as P from './shared/physics.js';
+import { loadRealMaps, realMapsDir } from './shared/realmaps-fs.js';
 import { WEAPONS, EQUIPMENT, computeDamage } from './shared/weapons.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 
 // ---------------------------------------------------------------- static files
+const REAL_MAPS = loadRealMaps();
 const STATIC = [
+  ['/local-maps/', realMapsDir()],
   ['/three/', path.join(ROOT, 'node_modules', 'three', 'build')],
   ['/shared/', path.join(ROOT, 'shared')],
   ['/', path.join(ROOT, 'public')],
@@ -46,6 +49,7 @@ function checkEditorPassword(req, password) {
 
 function handleApi(req, res, url) {
   const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+  if (url === '/api/realmaps') return json(200, REAL_MAPS);
   if (url === '/api/editor-status') return json(200, { canSave: isLocal(req) });
   const m = url.match(/^\/api\/mapedit\/([a-z0-9_]+)$/);
   const unlock = url === '/api/editor-unlock';
@@ -81,7 +85,7 @@ const server = http.createServer((req, res) => {
     const file = path.normalize(path.join(dir, url.slice(prefix.length)));
     if (!file.startsWith(dir)) { res.writeHead(403); return res.end(); }
     return fs.readFile(file, (err, data) => {
-      if (err) { res.writeHead(404); return res.end('Not found'); }
+      if (err) { if (url !== '/favicon.ico') console.log('  File not found: ' + url); res.writeHead(404); return res.end('Not found'); }
       res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
       res.end(data);
     });
@@ -1137,6 +1141,7 @@ setInterval(() => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log('\n  STRIKE LITE server running!\n');
+  console.log(REAL_MAPS.length ? '  Real CS2 layouts:     ' + REAL_MAPS.join(', ') + '\n' : '  Real CS2 layouts:     none found in ' + realMapsDir() + '\n');
   console.log(`  Play on this PC:      http://localhost:${PORT}`);
   const nets = os.networkInterfaces();
   for (const name of Object.keys(nets)) {

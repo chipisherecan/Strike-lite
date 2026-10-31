@@ -1,5 +1,6 @@
 // Procedural surface textures painted on canvases (no image files). Each returns a 256px tileable texture.
 import * as THREE from 'three';
+import { HD, DETAIL, HD_SIZE } from './textures-hd.js';
 
 const S = 256;
 
@@ -222,15 +223,16 @@ const P = {
 const cache = {};
 export function surfaceTexture(kind) {
   if (cache[kind]) return cache[kind];
+  const hd = HD[kind] || DETAIL[kind];
   const c = document.createElement('canvas');
-  c.width = c.height = S;
-  const g = c.getContext('2d');
+  c.width = c.height = hd ? HD_SIZE : S;
+  const g = c.getContext('2d', { willReadFrequently: true });
   let seed = 0; for (const ch of kind) seed = seed * 31 + ch.charCodeAt(0);
-  (P[kind] || P.stone)(g, rng(seed));
+  (hd || P[kind] || P.stone)(g, rng(seed));
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 4;
+  t.anisotropy = 16;
   cache[kind] = t;
   return t;
 }
@@ -238,4 +240,4 @@ export function surfaceTexture(kind) {
 export function isTextureCached(t) { return Object.values(cache).includes(t); }
 
 // Metres per texture repeat.
-export const TEX_SCALE = { limestone: 3.6, plaster_tan: 4, plaster_cream: 4, plaster_white: 4, plaster_orange: 4, trim_blue: 3, brick: 2.4, stone: 3, sand: 4, dirt: 4, pavers: 3, tiles: 2.4, cobble: 2.5, door: 2.5, wood: 2, crate: 1, container: 2.5, van: 2, car: 2, sandbag: 1.5, roof: 3, door_blue: 2.5, cloth_red: 2, cloth_blue: 2, cloth_cream: 2, leaves: 1, bark: 1 };
+export const TEX_SCALE = { plaster_ochre: 6, plaster_red: 6, plaster_blue: 6, plaster_pink: 6, plaster_green: 6, sandstone: 3.6, brick_pale: 3.2, flagstone: 4, cobble_warm: 3, tile_cream: 3.2, tile_terra: 3, tile_white: 3, wood_old: 2.4, crate_hd: 1.2, carton: 0.9, ceil_plain: 5, limestone: 3.6, plaster_tan: 4, plaster_cream: 6, plaster_white: 4, plaster_orange: 4, trim_blue: 3, brick: 2.4, stone: 3, sand: 4, dirt: 4, pavers: 3, tiles: 2.4, cobble: 2.5, door: 2.5, wood: 2, crate: 1, container: 2.5, van: 2, car: 2, sandbag: 1.5, roof: 3, door_blue: 2.5, cloth_red: 2, cloth_blue: 2, cloth_cream: 2, leaves: 1, bark: 1 };

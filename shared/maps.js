@@ -13,8 +13,10 @@
 import dust2Trace from './mapdata/dust2.js';
 import mirageTrace from './mapdata/mirage.js';
 import infernoTrace from './mapdata/inferno.js';
+import * as MIRAGE_PLAN from './mapdata/mirage-levels.js';
+import { buildPlan } from './mapdata/plan.js';
 import EDITS from './mapdata/edits.js';
-import { boxBrush, slopeBrush, buildGrid, trace } from './brush.js';
+import { boxBrush, slopeBrush, prismBrush, buildGrid, buildMeshIndex, trace } from './brush.js';
 import { boxBlocked } from './physics.js';
 
 export const CELL = 1;
@@ -24,7 +26,9 @@ export const NO_CEIL = 99;
 export const Z_NONE = 0, Z_A = 1, Z_B = 2, Z_TSPAWN = 3, Z_CTSPAWN = 4;
 
 export const MATS = ['sand', 'pavers', 'limestone', 'plaster_tan', 'door', 'crate', 'container', 'tiles', 'plaster_cream',
-  'brick', 'cobble', 'plaster_orange', 'stone', 'van', 'car', 'sandbag', 'wood', 'roof', 'trim_blue', 'dirt', 'plaster_white', 'door_blue'];
+  'brick', 'cobble', 'plaster_orange', 'stone', 'van', 'car', 'sandbag', 'wood', 'roof', 'trim_blue', 'dirt', 'plaster_white', 'door_blue',
+  'plaster_ochre', 'plaster_red', 'plaster_blue', 'plaster_pink', 'plaster_green', 'sandstone', 'brick_pale', 'flagstone', 'cobble_warm',
+  'tile_cream', 'tile_terra', 'tile_white', 'wood_old', 'crate_hd', 'carton', 'ceil_plain'];
 const MI = Object.fromEntries(MATS.map((m, i) => [m, i]));
 
 const DEFS = {
@@ -63,51 +67,9 @@ const DEFS = {
   mirage: {
     name: 'Mirage',
     desc: 'Palace, A ramp, connector, window, B apartments.',
-    trace: mirageTrace, top: 9,
-    theme: { floor: 'tiles', wall: 'plaster_cream', ceil: 'wood', skyTop: 0x4f86c6, skyHorizon: 0xdfe4e8, fog: 0xd8d6cc, sun: [-0.45, 0.8, 0.4], sunColor: [1.45, 1.35, 1.15], ambient: [0.37, 0.41, 0.51] },
-    ceilings: [
-      [9, 2, 88, 9, 3.2],      // B apartments (long indoor route along the north edge)
-      [55, 9, 67, 17, 3.2],    // apartments stairs
-      [43, 22, 47, 38, 3.0],   // underpass
-      [47, 48, 55, 59, 3.2],   // connector
-      [30, 47, 40, 58, 3.0],   // window room (sniper's nest)
-      [42, 61, 50, 68, 3.4],   // jungle
-      [74, 74, 97, 87, 3.3],   // palace interior
-      [9, 32, 27, 44, 3.4],    // shop / market
-    ],
-    paint: [[0, 0, 92, 12, 'plaster_white'], [70, 70, 100, 90, 'plaster_white'], [40, 18, 50, 40, 'brick'], [28, 44, 58, 62, 'trim_blue']],
-    floors: [[9, 2, 88, 17, 'wood'], [74, 74, 97, 87, 'tiles'], [9, 32, 27, 44, 'wood'], [30, 47, 40, 58, 'wood'], [43, 22, 47, 38, 'pavers']],
-    boxes: [[6, 2, 18, 11, 'van']],
-    // A and B site details, placed from reference screenshots (positions read off the radar underlay)
-    extra: [
-      // --- A site
-      { t: 'box', min: [55, 2.3, 75.5], max: [58, 4.1, 78.5], tex: { top: 'plaster_cream', side: 'plaster_cream', bottom: 'nodraw' }, box: true }, // "Stairs" block (red A)
-      { t: 'box', min: [62, 2.8, 76], max: [64.5, 4.0, 78.5], tex: 'crate', box: true },                 // Tetris
-      { t: 'box', min: [62.5, 4.0, 76.5], max: [64, 5.0, 78], tex: 'crate', box: true },
-      { t: 'box', min: [61.5, 2.6, 82], max: [63.5, 3.7, 84.5], tex: 'crate', box: true },               // default stack
-      { t: 'box', min: [61.8, 3.7, 82.3], max: [63.2, 4.6, 84.2], tex: { top: 'container', side: 'container', bottom: 'nodraw' }, box: true },
-      { t: 'box', min: [59.5, 2.9, 84.5], max: [62.5, 4.0, 87], tex: 'crate', box: true },               // Firebox
-      { t: 'box', min: [48, 2.9, 87.5], max: [51, 4.1, 90.5], tex: 'crate', box: true },                 // Triple box
-      { t: 'box', min: [48.5, 4.1, 88], max: [50.5, 5.2, 90], tex: 'crate', box: true },
-      { t: 'box', min: [64.5, 5.25, 78], max: [68, 5.5, 82.5], tex: { top: 'wood', side: 'wood', bottom: 'wood' } }, // Balcony (Shadows underneath)
-      { t: 'box', min: [64.5, 2.9, 78], max: [64.8, 5.25, 78.3], tex: 'wood' },
-      { t: 'box', min: [64.5, 2.9, 82.2], max: [64.8, 5.25, 82.5], tex: 'wood' },
-      // --- B site: open building with corner pillars and a green tarp roof
-      { t: 'box', min: [14.5, 2.4, 15], max: [15.1, 5.6, 15.6], tex: 'plaster_white' },
-      { t: 'box', min: [22.9, 2.4, 15], max: [23.5, 5.6, 15.6], tex: 'plaster_white' },
-      { t: 'box', min: [14.5, 2.4, 22.9], max: [15.1, 5.6, 23.5], tex: 'plaster_white' },
-      { t: 'box', min: [22.9, 2.4, 22.9], max: [23.5, 5.6, 23.5], tex: 'plaster_white' },
-      { t: 'box', min: [14.3, 5.6, 14.8], max: [23.7, 5.75, 23.7], tex: { top: 'cloth_green', side: 'cloth_green', bottom: 'cloth_green' }, roof: true },
-      { t: 'box', min: [6, 2.4, 26], max: [8, 2.9, 27], tex: 'wood', box: true },                        // Bench
-    ],
-    decor: [
-      { t: 'palm', x: 26, z: 70 }, { t: 'palm', x: 34, z: 74 }, { t: 'palm', x: 63, z: 90 }, { t: 'palm', x: 104, z: 45 },
-      { t: 'awning', x1: 76, z1: 36, x2: 81, z2: 38, h: 2.8, mat: 'cloth_blue' },
-      { t: 'awning', x1: 60, z1: 34, x2: 66, z2: 36, h: 2.8, mat: 'cloth_red' },
-      { t: 'awning', x1: 17, z1: 24, x2: 22, z2: 26, h: 2.6, mat: 'cloth_cream' },
-      { t: 'awning', x1: 87, z1: 66, x2: 90, z2: 70, h: 3.0, mat: 'cloth_red' },
-      ...[[45, 26], [45, 34], [51, 53], [20, 37], [85, 80], [60, 13]].map(([x, z]) => ({ t: 'lamp', x, z })),
-    ],
+    trace: mirageTrace,   // only used for the radar underlay in the editor
+    plan: MIRAGE_PLAN,
+    ...MIRAGE_PLAN.LOOK,
   },
   inferno: {
     name: 'Inferno',
@@ -164,6 +126,11 @@ function buildGridMap(id) {
     fh[i] = (ch.charCodeAt(0) - 48) / 10;
     if (tr.crates[z][x] === 'c') { fmat[i] = MI.crate; box[i] = 1; }
   }
+  const stair = new Uint8Array(N), under = new Float32Array(N).fill(-1);
+  if (d.levels) {
+    for (const r of d.levels.notBoxes) each(r, (i) => { box[i] = 0; fmat[i] = MI[d.theme.floor]; });
+    applyLevels(d, { w, h, solid, fh, box, each });
+  }
   // smooth ground: corners average the neighbours on the same level; ledges stay sharp
   const flatCell = (j) => !solid[j] && !box[j];
   for (let z = 0; z < h; z++) for (let x = 0; x < w; x++) {
@@ -191,6 +158,15 @@ function buildGridMap(id) {
     if (Math.abs(gx[i]) < 0.04) gx[i] = 0;
     if (Math.abs(gz[i]) < 0.04) gz[i] = 0;
   }
+  if (d.levels) {
+    // staircases are drawn step by step in gridToSource, tunnels get their floor and roof there too
+    for (const [x1, z1, x2, z2, axis, a, b] of d.levels.stairs) each([x1, z1, x2, z2], (i, x, z) => {
+      solid[i] = 0; stair[i] = 1; box[i] = 0; gx[i] = gz[i] = 0;
+      const t = axis === 'x' ? (x + 0.5 - x1) / (x2 + 1 - x1) : (z + 0.5 - z1) / (z2 + 1 - z1);
+      fh[i] = d.levelY(a + (b - a) * t);
+    });
+    for (const [x1, z1, x2, z2, u, clear] of d.levels.tunnels) each([x1, z1, x2, z2], (i) => { under[i] = d.levelY(u) + clear; });
+  }
   for (const [x1, z1, x2, z2, clear] of d.ceilings) {
     let hi = -Infinity;
     each([x1, z1, x2, z2], (i) => { if (!solid[i] && !box[i]) hi = Math.max(hi, fh[i] + Math.abs(gx[i]) + Math.abs(gz[i])); });
@@ -212,9 +188,44 @@ function buildGridMap(id) {
     top[i] = Math.max(top[i], mx);
   }
   const zr = { ...tr.zones, ...(d.zones || {}) };
-  const g = { w, h, solid, fh, gx, gz, ceil, top, fmat, wmat, box, zoneRects: zr };
+  const g = { w, h, solid, fh, gx, gz, ceil, top, fmat, wmat, box, stair, under, zoneRects: zr };
   gridCache[id] = g;
   return g;
+}
+
+// Replace the radar's height guesses with the measured tables of a map that has them (see mapdata/mirage-levels.js).
+function applyLevels(d, { w, solid, fh, box, each }) {
+  const L = d.levels, Y = d.levelY, N = fh.length;
+  const raw = Float32Array.from(fh), crate = Uint8Array.from(box);
+  for (let i = 0; i < N; i++) if (!solid[i]) fh[i] = Y(d.calibrate(raw[i]));
+  for (const r of L.notBoxes) each(r, (i) => { raw[i] = 0; });   // props there are placed by hand instead
+  for (const r of L.flats) {
+    // the area's usual radar height: anything well above it is a box or ledge standing on this floor
+    const counts = new Map();
+    each(r, (i) => { if (!solid[i] && !crate[i] && raw[i] > 0) { const k = Math.round(raw[i] * 10); counts.set(k, (counts.get(k) || 0) + 1); } });
+    let ref = Infinity, best = 0;
+    for (const [k, c] of counts) if (c > best) { best = c; ref = k / 10; }
+    each(r, (i) => {
+      if (solid[i]) return;
+      const rise = raw[i] - ref;
+      if (rise > 0.3) { fh[i] = Y(r[4]) + rise; box[i] = 1; } else if (!crate[i]) { fh[i] = Y(r[4]); box[i] = 0; }
+    });
+  }
+  for (const [x1, z1, x2, z2, axis, a, b] of L.ramps) each([x1, z1, x2, z2], (i, x, z) => {
+    if (solid[i]) return;
+    const t = axis === 'x' ? (x + 0.5 - x1) / (x2 + 1 - x1) : (z + 0.5 - z1) / (z2 + 1 - z1);
+    fh[i] = Y(a + (b - a) * t); box[i] = 0;
+  });
+  // crates keep their height above the floor beside them
+  for (let i = 0; i < N; i++) {
+    if (solid[i] || !crate[i]) continue;
+    for (const j of [i - 1, i + 1, i - w, i + w, i - 2, i + 2, i - 2 * w, i + 2 * w]) {
+      if (j < 0 || j >= N || solid[j] || box[j]) continue;
+      if (fh[i] < fh[j] + 0.3) fh[i] = fh[j] + Math.max(0.5, Math.min(1.4, raw[i] - raw[j]));
+      break;
+    }
+  }
+  for (const r of L.fill) each(r, (i) => { solid[i] = 1; });
 }
 
 // Greedy rectangle merge over cells that share a key (classic "greedy meshing").
@@ -240,44 +251,66 @@ function greedyRects(w, h, keyOf) {
 
 // Convert the height grid into brushes (serializable map source).
 function gridToSource(id) {
-  const d = DEFS[id], g = buildGridMap(id), th = d.theme;
+  const d = DEFS[id];
+  if (d.plan) return buildPlan({ ...d.plan, size: [d.trace.w, d.trace.h] });
+  const g = buildGridMap(id), th = d.theme;
   const { w, h } = g;
   const brushes = [];
   const q = (v, s = 0.05) => Math.round(v / s) * s;
   // walls: tall boxes, bottom just below the lowest neighbouring floor
-  for (const r of greedyRects(w, h, (i) => (g.solid[i] ? `${q(g.top[i], 0.1)}|${g.wmat[i]}` : null))) {
+  for (const r of greedyRects(w, h, (i) => (g.solid[i] && !g.stair[i] ? `${q(g.top[i], 0.1)}|${g.wmat[i]}|${g.under[i]}` : null))) {
     let lo = Infinity;
     for (let z = r.z - 1; z <= r.z2 + 1; z++) for (let x = r.x - 1; x <= r.x2 + 1; x++) {
       if (x < 0 || z < 0 || x >= w || z >= h) continue;
       const j = z * w + x;
       if (!g.solid[j]) lo = Math.min(lo, g.fh[j] - Math.abs(g.gx[j]) - Math.abs(g.gz[j]));
     }
-    const bottom = (lo === Infinity ? 0 : lo) - 0.3;
-    const m = MATS[g.wmat[r.i]];
-    brushes.push({ t: 'box', min: [r.x, bottom, r.z], max: [r.x2 + 1, q(g.top[r.i], 0.1), r.z2 + 1], tex: { top: m, side: m, bottom: 'nodraw' }, wall: true });
+    // a map with lower levels needs its walls to reach all the way down
+    const bottom = d.levels ? (g.under[r.i] >= 0 ? g.under[r.i] : -1) : (lo === Infinity ? 0 : lo) - 0.3;
+    const m = MATS[g.wmat[r.i]], overTunnel = g.under[r.i] >= 0;
+    // walls above a tunnel can't be flagged as walls: navigation stops looking for floors below a wall
+    brushes.push({ t: 'box', min: [r.x, bottom, r.z], max: [r.x2 + 1, q(g.top[r.i], 0.1), r.z2 + 1], tex: { top: d.levels ? 'flagstone' : m, side: m, bottom: overTunnel ? 'ceil_plain' : 'nodraw' }, wall: overTunnel ? undefined : true });
   }
   // floors: flat slabs (merged) and sloped cells (merged when they share a plane)
   const keyFloor = (i) => {
-    if (g.solid[i]) return null;
+    if (g.solid[i] || g.stair[i]) return null;
     const m = g.fmat[i];
-    if (!g.gx[i] && !g.gz[i]) return `f|${q(g.fh[i])}|${m}|${g.box[i]}`;
+    if (!g.gx[i] && !g.gz[i]) return `f|${q(g.fh[i])}|${m}|${g.box[i]}|${g.under[i]}`;
     const cx = i % w + 0.5, cz = Math.floor(i / w) + 0.5;
     const a = g.fh[i] - g.gx[i] * cx - g.gz[i] * cz;
-    return `s|${q(g.gx[i], 0.02)}|${q(g.gz[i], 0.02)}|${q(a, 0.1)}|${m}`;
+    return `s|${q(g.gx[i], 0.02)}|${q(g.gz[i], 0.02)}|${q(a, 0.1)}|${m}|${g.under[i]}`;
   };
   for (const r of greedyRects(w, h, keyFloor)) {
     const i = r.i, m = MATS[g.fmat[i]];
     const isBox = !!g.box[i];
     const side = isBox ? m : (m === 'stone' ? 'stone' : th.wall);
-    const tex = { top: m, side, bottom: 'nodraw' };
+    const floorBottom = g.under[i] >= 0 ? g.under[i] : -1;
+    const tex = { top: m, side, bottom: g.under[i] >= 0 ? 'ceil_plain' : 'nodraw' };
     if (r.k.startsWith('f')) {
-      brushes.push({ t: 'box', min: [r.x, -1, r.z], max: [r.x2 + 1, q(g.fh[i]), r.z2 + 1], tex, box: isBox || undefined });
+      brushes.push({ t: 'box', min: [r.x, floorBottom, r.z], max: [r.x2 + 1, q(g.fh[i]), r.z2 + 1], tex, box: isBox || undefined });
     } else {
       // plane through the first cell, shared by the merged cells
       const cx = i % w + 0.5, cz = Math.floor(i / w) + 0.5;
       const sx = g.gx[i], sz = g.gz[i], a = g.fh[i] - sx * cx - sz * cz;
-      brushes.push({ t: 'slope', x0: r.x, z0: r.z, x1: r.x2 + 1, z1: r.z2 + 1, bottom: -1, a, sx, sz, tex });
+      brushes.push({ t: 'slope', x0: r.x, z0: r.z, x1: r.x2 + 1, z1: r.z2 + 1, bottom: floorBottom, a, sx, sz, tex });
     }
+  }
+  if (d.levels) {
+    // staircases: individual steps of about 19 cm (players step up to 45 cm)
+    const stepTex = { top: 'flagstone', side: 'sandstone', bottom: 'nodraw' };
+    for (const [x1, z1, x2, z2, axis, a, b] of d.levels.stairs) {
+      const ya = d.levelY(a), yb = d.levelY(b), n = Math.max(2, Math.round(Math.abs(yb - ya) / 0.19));
+      const start = axis === 'x' ? x1 : z1, run = (axis === 'x' ? x2 - x1 : z2 - z1) + 1;
+      for (let k = 0; k < n; k++) {
+        const s0 = start + run * k / n, s1 = start + run * (k + 1) / n, y = q(ya + (yb - ya) * (k + 0.5) / n, 0.01);
+        brushes.push(axis === 'x'
+          ? { t: 'box', min: [s0, -1, z1], max: [s1, y, z2 + 1], tex: stepTex }
+          : { t: 'box', min: [x1, -1, s0], max: [x2 + 1, y, s1], tex: stepTex });
+      }
+    }
+    // tunnels: the floor (the floors and walls above already end at the tunnel's ceiling height)
+    for (const [x1, z1, x2, z2, u] of d.levels.tunnels)
+      brushes.push({ t: 'box', min: [x1, -1, z1], max: [x2 + 1, d.levelY(u), z2 + 1], tex: { top: 'tile_terra', side: 'brick_pale', bottom: 'nodraw' } });
   }
   // roofs: slabs over covered cells
   for (const r of greedyRects(w, h, (i) => (!g.solid[i] && g.ceil[i] < NO_CEIL ? `${q(g.ceil[i], 0.1)}|${q(Math.max(g.top[i], g.ceil[i] + 1.2), 0.1)}` : null))) {
@@ -297,8 +330,21 @@ function gridToSource(id) {
 // Map source = { size:[w,h], brushes:[...], zones:{A,B,T,CT:[x1,z1,x2,z2]}, decor:[...], lights:[...] }
 export function getMapSource(id) {
   if (!DEFS[id]) id = MAP_IDS[0];
-  return EDITS[id] || gridToSource(id);
+  // a save of the hand-built map uses other coordinates: it stays on file but doesn't apply to an imported map
+  if (REAL[id]) return EDITS[id] && EDITS[id].real ? EDITS[id] : getOriginalSource(id);
+  return EDITS[id] && !EDITS[id].real ? EDITS[id] : getOriginalSource(id);
 }
+
+// Maps imported from the host's own CS2 install (tools/import-cs2.mjs). Not part of the project; they replace the hand-built version.
+const REAL = {};
+export function registerRealMap(id, meta, collision) {
+  if (!DEFS[id]) return;
+  const n = meta.triCount;
+  REAL[id] = { meta, mesh: buildMeshIndex(new Float32Array(collision, 0, n * 9), new Uint8Array(collision, n * 36, n)) };
+  delete worldCache[id];
+}
+export function isRealMap(id) { return !!REAL[id]; }
+export function realMesh(id) { return REAL[id] ? REAL[id].mesh : null; }
 
 export function getMap(id) {
   if (!DEFS[id]) id = MAP_IDS[0];
@@ -316,24 +362,28 @@ export function setMapEdit(id, src) {
   delete worldCache[id];
 }
 export function getAllEdits() { return EDITS; }
-export function isEdited(id) { return !!EDITS[id]; }
-export function getRadarInfo(id) { return DEFS[id] && DEFS[id].trace ? DEFS[id].trace.radar : null; }
+export function isEdited(id) { return !!EDITS[id] && !!EDITS[id].real === !!REAL[id]; }
+export function getRadarInfo(id) { return REAL[id] ? REAL[id].meta.radar : DEFS[id] && DEFS[id].trace ? DEFS[id].trace.radar : null; }
 export function getTheme(id) { return (DEFS[id] || DEFS[MAP_IDS[0]]).theme; }
 // The original (traced) version of a map, ignoring any editor save.
-export function getOriginalSource(id) { return gridToSource(id); }
+export function getOriginalSource(id) {
+  if (REAL[id]) { const m = REAL[id].meta; return { version: 1, real: true, size: m.size, brushes: [], zones: m.zones, decor: [], lights: [] }; }
+  return gridToSource(id);
+}
 
 export function validateSource(src) {
   if (!src || !Array.isArray(src.brushes) || !src.zones || !Array.isArray(src.size)) throw new Error('bad map data');
   if (src.brushes.length > 20000) throw new Error('too many brushes');
   for (const k of ['A', 'B', 'T', 'CT']) if (!Array.isArray(src.zones[k]) || src.zones[k].length !== 4) throw new Error('missing zone ' + k);
   for (const b of src.brushes) {
-    const nums = b.t === 'box' ? [...b.min, ...b.max] : b.t === 'slope' ? [b.x0, b.z0, b.x1, b.z1, b.bottom, b.a, b.sx, b.sz] : null;
+    const nums = b.t === 'box' ? [...b.min, ...b.max] : b.t === 'slope' ? [b.x0, b.z0, b.x1, b.z1, b.bottom, b.a, b.sx, b.sz] : b.t === 'prism' ? [...b.pts.flat(), b.bottom, b.top] : null;
     if (!nums || nums.some(v => typeof v !== 'number' || !isFinite(v))) throw new Error('bad brush');
   }
 }
 
 export function makeBrushFromSource(b) {
   const flags = { box: !!b.box, clip: !!b.clip, noshoot: !!b.clip, roof: !!b.roof, wall: !!b.wall };
+  if (b.t === 'prism') return prismBrush(b.pts, b.bottom, b.top, b.plane, b.tex, flags);
   if (b.t === 'slope') return slopeBrush(b.x0, b.z0, b.x1, b.z1, b.bottom, b.a, b.sx, b.sz, b.tex, flags);
   return boxBrush(b.min, b.max, b.tex, flags);
 }
@@ -347,8 +397,13 @@ export function buildWorldFromSource(id, src) {
     zoneRects: src.zones, decor: src.decor || [], lights: src.lights || [], version: hashSource(src),
   };
   map.bounds = { min: [0, -2, 0], max: [w, 40, h] };
+  if (REAL[id]) {
+    map.mesh = REAL[id].mesh; map.real = REAL[id].meta;
+    map.theme = { ...d.theme, sun: map.real.sun };
+    map.version += map.real.hash;
+  }
   map.siteCenter = { A: rectCenter(map, src.zones.A), B: rectCenter(map, src.zones.B) };
-  map.spawns = { T: spawnPoints(map, src.zones.T), CT: spawnPoints(map, src.zones.CT) };
+  map.spawns = map.real ? map.real.spawns : { T: spawnPoints(map, src.zones.T), CT: spawnPoints(map, src.zones.CT) };
   return map;
 }
 
@@ -384,7 +439,8 @@ function spawnPoints(map, r) {
 
 // Highest floor at (x, z) seen from the sky (ignores roofs above standing height is not attempted).
 export function floorAt(map, x, z, fromY = 40) {
-  const tr = trace(map, [x, fromY, z], [x, -5, z], [0.05, 0.01, 0.05]);
+  // a thin ray on imported maps: it passes through the invisible player-clip ceiling
+  const tr = trace(map, [x, fromY, z], [x, -5, z], map.mesh ? [0, 0, 0] : [0.05, 0.01, 0.05]);
   // skip roofs: if we land on a roof slab, look below it
   if (tr.fraction < 1 && tr.brush) {
     const b = tr.brush;

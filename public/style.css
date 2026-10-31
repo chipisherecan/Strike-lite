@@ -146,6 +146,11 @@ body.hurt #view { filter: saturate(0.6); }
 .ed-view { flex: 1; position: relative; min-width: 0; }
 #ed-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 #ed-3dview { position: absolute; inset: 0; background: #000; }
+#ed-modes { position: absolute; left: 10px; top: 10px; display: flex; gap: 4px; }
+#ed-modes.hidden { display: none; }
+#ed-modes button { padding: 6px 10px; font-size: 13px; background: #1d2024; color: #eee; }
+#ed-modes button small { color: var(--muted); margin-left: 6px; font-size: 10px; }
+#ed-modes button.on { background: rgba(240,160,32,0.85); color: #111; border-color: var(--accent); }
 .ed-props { width: 270px; overflow-y: auto; padding: 8px 12px; background: #1a1d21; border-left: 1px solid var(--line); font-size: 13px; }
 .ed-props h3 { margin: 12px 0 6px; font-size: 13px; color: var(--accent); }
 .ed-props label { display: flex; flex-direction: column; gap: 3px; margin-bottom: 7px; color: var(--muted); }

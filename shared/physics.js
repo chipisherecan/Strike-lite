@@ -5,7 +5,7 @@ export const PLAYER_R = 0.35;
 export const STAND_H = 1.8, CROUCH_H = 1.25;
 export const EYE_STAND = 1.62, EYE_CROUCH = 1.1;
 export const GRAVITY = 20;
-export const JUMP_V = 6.0;
+export const JUMP_V = 7.4;           // 54 units (1.37 m) high, the same as a Counter-Strike standing jump
 export const STEP = 0.45;            // GoldSrc stepsize is 18 units
 const WALKABLE = 0.7;                // floors steeper than ~45 degrees are walls
 

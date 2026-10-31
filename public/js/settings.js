@@ -2,8 +2,8 @@
 const DEFAULTS = {
   sens: 1.0,          // mouse sensitivity
   fov: 80,
-  renderScale: 0.75,  // lower = faster on weak GPUs
-  viewDist: 110,
+  renderScale: 1,     // lower = faster on weak GPUs
+  viewDist: 160,
   volume: 0.6,
   crossColor: '#33ff33',
   crossSize: 6,

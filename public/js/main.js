@@ -5,7 +5,10 @@ import { Editor } from './editor.js';
 import { initAudio } from './audio.js';
 import { settings, buildSettingsUI } from './settings.js';
 import { drawMapCanvas } from './world.js';
-import { getMap, MAP_INFO } from '/shared/maps.js';
+import { getMap, MAP_INFO, registerRealMap, isRealMap } from '/shared/maps.js';
+import { loadRealMaps } from './realworld.js';
+
+await loadRealMaps(registerRealMap);
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -15,7 +18,7 @@ const isOpen = (id) => !$(id).classList.contains('hidden');
 const net = new Net();
 let creating = false;
 let lobby = null;
-let selectedMap = MAP_INFO[0].id;
+let selectedMap = (MAP_INFO.find(m => isRealMap(m.id)) || MAP_INFO[0]).id;
 let listTimer = 0;
 
 const ui = {
@@ -99,7 +102,7 @@ for (const m of MAP_INFO) {
   const card = document.createElement('div');
   card.className = 'mapcard' + (m.id === selectedMap ? ' sel' : '');
   card.appendChild(drawMapCanvas(getMap(m.id), 2));
-  card.insertAdjacentHTML('beforeend', `<b>${esc(m.name)}</b><small>${esc(m.desc)}</small>`);
+  card.insertAdjacentHTML('beforeend', `<b>${esc(m.name)}${isRealMap(m.id) ? ' <span style="color:#7fe08a">(real CS2 layout)</span>' : ''}</b><small>${esc(m.desc)}</small>`);
   card.onclick = () => { selectedMap = m.id; mapsEl.querySelectorAll('.mapcard').forEach(c => c.classList.remove('sel')); card.classList.add('sel'); };
   mapsEl.appendChild(card);
 }

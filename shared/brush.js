@@ -37,6 +37,26 @@ export function slopeBrush(x0, z0, x1, z1, bottom, a, sx, sz, tex, flags = {}) {
   ], flags);
 }
 
+// Convex outline [[x,z],...] extruded from bottom to top; `plane` {a,sx,sz} tilts the top to y = a + sx*x + sz*z.
+export function prismBrush(pts, bottom, top, plane, tex, flags = {}) {
+  const t = normTex(tex);
+  let s = 0;
+  for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; s += a[0] * b[1] - b[0] * a[1]; }
+  const p = s > 0 ? pts : pts.slice().reverse(), planes = [];
+  for (let i = 0; i < p.length; i++) {
+    const a = p[i], b = p[(i + 1) % p.length], dx = b[0] - a[0], dz = b[1] - a[1], l = Math.hypot(dx, dz);
+    if (l < 1e-6) continue;
+    const n = [dz / l, 0, -dx / l];
+    planes.push({ n, d: n[0] * a[0] + n[2] * a[1], tex: t.side });
+  }
+  if (plane) {
+    const len = Math.hypot(plane.sx, 1, plane.sz);
+    planes.push({ n: [-plane.sx / len, 1 / len, -plane.sz / len], d: plane.a / len, tex: t.top });
+  } else planes.push({ n: [0, 1, 0], d: top, tex: t.top });
+  planes.push({ n: [0, -1, 0], d: -bottom, tex: t.bottom });
+  return makeBrush(planes, flags);
+}
+
 function normTex(tex) {
   if (!tex) return { top: 'stone', bottom: 'stone', side: 'stone' };
   if (typeof tex === 'string') return { top: tex, bottom: tex, side: tex };
@@ -140,6 +160,7 @@ export function trace(world, start, end, ext) {
     if (b.flags.noshoot && ext[0] === 0 && ext[1] === 0) return; // clip brushes block players, not bullets
     clipToBrush(b, start, end, ext, tw);
   });
+  if (world.mesh) clipMesh(world.mesh, start, end, ext, tw, minx, miny, minz, maxx, maxy, maxz);
   const f = tw.fraction;
   tw.end = [start[0] + (end[0] - start[0]) * f, start[1] + (end[1] - start[1]) * f, start[2] + (end[2] - start[2]) * f];
   return tw;
@@ -173,6 +194,113 @@ function clipToBrush(b, start, end, ext, tw) {
     tw.fraction = Math.max(0, enterFrac);
     tw.normal = b.planes[clip].n;
     tw.brush = b; tw.plane = clip;
+  }
+}
+
+// ---------------------------------------------------------------- triangle collision (maps imported from CS2)
+// tris holds 9 floats per triangle; flags bit 0 means it blocks players but not bullets.
+export function buildMeshIndex(tris, flags) {
+  const n = flags.length, lists = new Map();
+  for (let i = 0; i < n; i++) {
+    const o = i * 9;
+    const x0 = Math.min(tris[o], tris[o + 3], tris[o + 6]), x1 = Math.max(tris[o], tris[o + 3], tris[o + 6]);
+    const z0 = Math.min(tris[o + 2], tris[o + 5], tris[o + 8]), z1 = Math.max(tris[o + 2], tris[o + 5], tris[o + 8]);
+    for (let gx = Math.floor(x0 / GRID); gx <= Math.floor(x1 / GRID); gx++)
+      for (let gz = Math.floor(z0 / GRID); gz <= Math.floor(z1 / GRID); gz++) {
+        const k = gx * 73856093 ^ gz * 19349663;
+        let l = lists.get(k);
+        if (!l) lists.set(k, l = []);
+        l.push(i);
+      }
+  }
+  const cells = new Map();
+  for (const [k, l] of lists) cells.set(k, Int32Array.from(l));
+  return { tris, flags, cells, stamps: new Uint32Array(n), stamp: 0 };
+}
+
+// Upward part of a triangle's own facing, ignoring which side a trace hit it from.
+export function triUp(mesh, i) {
+  const T = mesh.tris, o = i * 9, ux = T[o + 3] - T[o], uy = T[o + 4] - T[o + 1], uz = T[o + 5] - T[o + 2], vx = T[o + 6] - T[o], vy = T[o + 7] - T[o + 1], vz = T[o + 8] - T[o + 2];
+  const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  return ny / (Math.hypot(nx, ny, nz) || 1);
+}
+
+function clipMesh(m, start, end, ext, tw, minx, miny, minz, maxx, maxy, maxz) {
+  const s = ++m.stamp, T = m.tris, ray = ext[0] === 0 && ext[1] === 0;
+  // only cells near the segment: a long diagonal shot should not visit its whole bounding box
+  const dx = end[0] - start[0], dz = end[2] - start[2], len = Math.hypot(dx, dz), reach = GRID * 0.7072 + Math.max(ext[0], ext[2]) + 0.02;
+  for (let gx = Math.floor(minx / GRID); gx <= Math.floor(maxx / GRID); gx++)
+    for (let gz = Math.floor(minz / GRID); gz <= Math.floor(maxz / GRID); gz++) {
+      if (len > GRID && Math.abs((gx * GRID + GRID / 2 - start[0]) * dz - (gz * GRID + GRID / 2 - start[2]) * dx) / len > reach) continue;
+      const list = m.cells.get(gx * 73856093 ^ gz * 19349663);
+      if (!list) continue;
+      for (let c = 0; c < list.length; c++) {
+        const i = list[c];
+        if (m.stamps[i] === s) continue;
+        m.stamps[i] = s;
+        if (ray && (m.flags[i] & 1)) continue;
+        const o = i * 9;
+        if (Math.max(T[o], T[o + 3], T[o + 6]) < minx || Math.min(T[o], T[o + 3], T[o + 6]) > maxx) continue;
+        if (Math.max(T[o + 1], T[o + 4], T[o + 7]) < miny || Math.min(T[o + 1], T[o + 4], T[o + 7]) > maxy) continue;
+        if (Math.max(T[o + 2], T[o + 5], T[o + 8]) < minz || Math.min(T[o + 2], T[o + 5], T[o + 8]) > maxz) continue;
+        clipTri(m, i, start, end, ext, tw);
+      }
+    }
+}
+
+// A box against a triangle: the same plane clipping as clipToBrush, over the 13 axes that can separate them.
+let cEnter, cLeave, cStartOut, cGetOut, cNx, cNy, cNz;
+function plane(nx, ny, nz, d1, d2) {
+  if (d2 > 0) cGetOut = true;
+  if (d1 > 0) cStartOut = true;
+  if (d1 > 0 && (d2 >= SURF_EPS || d2 >= d1)) return false;
+  if (d1 <= 0 && d2 <= 0) return true;
+  if (d1 > d2) {
+    const f = Math.max(0, (d1 - DIST_EPS) / (d1 - d2));
+    if (f > cEnter) { cEnter = f; cNx = nx; cNy = ny; cNz = nz; }
+  } else {
+    const f = Math.min(1, (d1 + DIST_EPS) / (d1 - d2));
+    if (f < cLeave) cLeave = f;
+  }
+  return true;
+}
+function axis(T, o, nx, ny, nz, start, end, ext) {
+  const l = Math.hypot(nx, ny, nz);
+  if (l < 1e-7) return true;
+  nx /= l; ny /= l; nz /= l;
+  const p0 = T[o] * nx + T[o + 1] * ny + T[o + 2] * nz, p1 = T[o + 3] * nx + T[o + 4] * ny + T[o + 5] * nz, p2 = T[o + 6] * nx + T[o + 7] * ny + T[o + 8] * nz;
+  const lo = Math.min(p0, p1, p2), hi = Math.max(p0, p1, p2), r = Math.abs(nx) * ext[0] + Math.abs(ny) * ext[1] + Math.abs(nz) * ext[2];
+  const a = start[0] * nx + start[1] * ny + start[2] * nz, b = end[0] * nx + end[1] * ny + end[2] * nz;
+  return plane(nx, ny, nz, a - hi - r, b - hi - r) && plane(-nx, -ny, -nz, lo - r - a, lo - r - b);
+}
+function clipTri(m, i, start, end, ext, tw) {
+  const T = m.tris, o = i * 9;
+  const ax = T[o + 3] - T[o], ay = T[o + 4] - T[o + 1], az = T[o + 5] - T[o + 2], bx = T[o + 6] - T[o + 3], by = T[o + 7] - T[o + 4], bz = T[o + 8] - T[o + 5], cx = T[o] - T[o + 6], cy = T[o + 1] - T[o + 7], cz = T[o + 2] - T[o + 8];
+  cEnter = -1; cLeave = 1; cStartOut = false; cGetOut = false;
+  if (!axis(T, o, ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx, start, end, ext)) return;
+  if (!axis(T, o, 1, 0, 0, start, end, ext) || !axis(T, o, 0, 1, 0, start, end, ext) || !axis(T, o, 0, 0, 1, start, end, ext)) return;
+  if (ext[0] || ext[1] || ext[2]) {
+    if (!axis(T, o, 0, -az, ay, start, end, ext) || !axis(T, o, az, 0, -ax, start, end, ext) || !axis(T, o, -ay, ax, 0, start, end, ext)) return;
+    if (!axis(T, o, 0, -bz, by, start, end, ext) || !axis(T, o, bz, 0, -bx, start, end, ext) || !axis(T, o, -by, bx, 0, start, end, ext)) return;
+    if (!axis(T, o, 0, -cz, cy, start, end, ext) || !axis(T, o, cz, 0, -cx, start, end, ext) || !axis(T, o, -cy, cx, 0, start, end, ext)) return;
+  } else {
+    // a ray must also cross inside the triangle's three edges
+    const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+    if (!axis(T, o, ny * az - nz * ay, nz * ax - nx * az, nx * ay - ny * ax, start, end, ext)) return;
+    if (!axis(T, o, ny * bz - nz * by, nz * bx - nx * bz, nx * by - ny * bx, start, end, ext)) return;
+    if (!axis(T, o, ny * cz - nz * cy, nz * cx - nx * cz, nx * cy - ny * cx, start, end, ext)) return;
+  }
+  const lowest = Math.min(T[o + 1], T[o + 4], T[o + 7]);
+  if (!cStartOut) {
+    tw.startsolid = true;
+    if (!cGetOut) { tw.allsolid = true; tw.fraction = 0; tw.brush = { flags: {}, min: [0, lowest, 0], index: -1, tri: i }; tw.normal = tw.normal || [0, 1, 0]; }
+    return;
+  }
+  if (cEnter <= cLeave + 1e-9 && cEnter > -1 && cEnter < tw.fraction) {   // a ray enters and leaves a flat triangle at the same moment
+    tw.fraction = Math.max(0, cEnter);
+    tw.normal = [cNx, cNy, cNz];
+    tw.brush = { flags: {}, min: [0, lowest, 0], index: -1, tri: i };
+    tw.plane = -1;
   }
 }
 

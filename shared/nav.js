@@ -1,10 +1,12 @@
 // Bot navigation for brush maps. Samples every 1 m column for standing spots (several levels per column, so
 // rooms above tunnels work), links neighbours a bot can walk/step/jump/drop between, and runs A* over that graph.
-import { trace } from './brush.js';
+import { trace, triUp } from './brush.js';
 import { boxBlocked, groundHeight } from './physics.js';
 
 const R = 0.3;
 const ZERO_H = 0.01;
+const RM = 0.36;  // imported maps: a little wider than a player, so paths don't scrape poles and corners
+const JITTER = [[0, 0], [-0.27, -0.27], [0.27, -0.27], [-0.27, 0.27], [0.27, 0.27]];
 
 export function getNav(map) {
   if (!map.nav) map.nav = buildNav(map);
@@ -16,6 +18,27 @@ function buildNav(map) {
   const nodes = [], cols = new Array(W * H);
   for (let cz = 0; cz < H; cz++) for (let cx = 0; cx < W; cx++) {
     const x = cx + 0.5, z = cz + 0.5, list = [];
+    if (map.mesh) {
+      // imported maps: every upward surface thin rays pass through, if a bot fits there. Five rays per metre, so a
+      // corridor that misses the middle of the column is still found; one spot per level.
+      for (const [ox, oz] of JITTER) {
+        const px = x + ox, pz = z + oz;
+        let y0 = 44;
+        for (let k = 0; k < 24; k++) {
+          const tr = trace(map, [px, y0, pz], [px, -5, pz], [0, 0, 0]);
+          if (tr.fraction >= 1 || !tr.brush) break;
+          const b = tr.brush, y = tr.end[1];
+          y0 = (b.tri === undefined ? b.min[1] : y) - 0.03;
+          if ((b.tri === undefined ? tr.normal[1] : triUp(map.mesh, b.tri)) < 0.7) continue;
+          if (list.some(j => Math.abs(nodes[j].y - y) < 0.35)) continue;
+          if (boxBlocked(map, px, y + 0.32, pz, RM, 1.43)) continue;   // lifted: real ground slopes and has small lips
+          list.push(nodes.length);
+          nodes.push({ x: px, y, z: pz, col: cz * W + cx });
+        }
+      }
+      cols[cz * W + cx] = list;
+      continue;
+    }
     let startY = 40;
     for (let k = 0; k < 4; k++) {
       const tr = trace(map, [x, startY, z], [x, -5, z], [R, ZERO_H, R]);
@@ -43,10 +66,11 @@ function buildNav(map) {
         const b = nodes[j], dy = b.y - a.y;
         if (dy > 0.9 || dy < -4) continue;
         // sweep a standing box between the two spots, just above the higher floor
-        const y = Math.max(a.y, b.y) + 0.06 + 0.875;
-        const tr = trace(map, [a.x, y, a.z], [b.x, y, b.z], [R, 0.875, R]);
+        // (imported maps: lifted by a step, since real floors have lips and curbs that players walk over)
+        const lift = map.mesh ? 0.46 : 0.06, half = (1.75 - lift + 0.06) / 2, y = Math.max(a.y, b.y) + lift + half;
+        const tr = trace(map, [a.x, y, a.z], [b.x, y, b.z], map.mesh ? [RM, half, RM] : [R, half, R]);
         if (tr.fraction < 1 || tr.startsolid) continue;
-        const cost = Math.hypot(dx, dz) + (dy > 0.45 ? 1.5 : 0) + (dy < -1.2 ? 1 : 0);
+        const cost = Math.hypot(b.x - a.x, b.z - a.z) + (dy > 0.45 ? 1.5 : 0) + (dy < -1.2 ? 1 : 0);
         edges[i].push(j, cost);
       }
     }
@@ -131,8 +155,18 @@ export function zoneSpots(map, r) {
   if (!nav.zoneCache) nav.zoneCache = new Map();
   const key = r.join(',');
   if (nav.zoneCache.has(key)) return nav.zoneCache.get(key);
+  // only ground bots can reach: the top of a big crate also looks like open ground
+  if (!nav.reachable) {
+    nav.reachable = new Uint8Array(nav.nodes.length);
+    const s = map.spawns ? map.spawns.T[0] : null, start = s ? nearestNode(nav, s.x, s.y, s.z) : -1, stack = start >= 0 ? [start] : [];
+    if (start >= 0) nav.reachable[start] = 1;
+    while (stack.length) {
+      const e = nav.edges[stack.pop()];
+      for (let k = 0; k < e.length; k += 2) if (!nav.reachable[e[k]]) { nav.reachable[e[k]] = 1; stack.push(e[k]); }
+    }
+  }
   // edges hold (node, cost) pairs: 12+ entries = 6+ walkable neighbours, i.e. open ground away from walls and boxes
-  const out = nav.nodes.filter((n, i) => n.x >= r[0] && n.x < r[2] && n.z >= r[1] && n.z < r[3] && nav.edges[i].length >= 12);
+  const out = nav.nodes.filter((n, i) => nav.reachable[i] && n.x >= r[0] && n.x < r[2] && n.z >= r[1] && n.z < r[3] && nav.edges[i].length >= 12);
   nav.zoneCache.set(key, out);
   return out;
 }

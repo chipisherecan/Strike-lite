@@ -31,7 +31,7 @@ export class Game {
     this.net = net;
     this.ui = ui; // callbacks into main.js (pause menu etc.)
     this.hud = new Hud();
-    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.autoClear = false;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
@@ -135,13 +135,15 @@ export class Game {
     overlay.classList.remove('hidden');
     label.textContent = `Loading ${this.map.name}…`;
     const t0 = performance.now();
-    const world = await buildWorld(this.map, this.scene, (f) => { label.textContent = `Baking lighting for ${this.map.name}… ${Math.round(f * 100)}%`; });
+    const world = await buildWorld(this.map, this.scene, (f) => { label.textContent = `${this.map.mesh ? 'Loading' : 'Baking lighting for'} ${this.map.name}… ${Math.round(f * 100)}%`; }, this.renderer);
     if (token !== this.loadToken) { world.dispose(); return; } // a newer load started meanwhile
     this.world = world;
     overlay.classList.add('hidden');
     console.log(`Built ${this.map.name} in ${Math.round(performance.now() - t0)} ms`);
-    this.actorLights = addActorLights(this.scene, this.map.theme);
+    this.actorLights = world.ownLights ? null : addActorLights(this.scene, this.map.theme);
     this.scene.fog = new THREE.Fog(this.map.theme.fog, settings.viewDist * 0.5, settings.viewDist);
+    // imported maps are detailed and large: a farther near plane gives more depth precision
+    this.camera.near = this.map.mesh ? 0.12 : 0.05; this.camera.updateProjectionMatrix();
     this.hud.setRadarMap(drawMapCanvas(this.map, 3));
     const c = this.map.siteCenter.A;
     this.spec.free = { x: this.map.w * CELL / 2, y: 30, z: this.map.h * CELL / 2 };
