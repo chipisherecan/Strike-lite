@@ -19,7 +19,7 @@ The link runs through Cloudflare's free tunnel service (or localhost.run if Clou
 passes through them, encrypted between each player and the service. Only people with the link can join, and friends
 never see the host's IP address. Some school or office networks block these services.
 
-**Same network or your own VPN:** tick **Allow direct LAN / VPN connections** in the launcher and share the address
-shown under it. Windows then asks to allow Node.js through the firewall, which needs admin on many PCs.
+**Same network or your own VPN:** turn on **Allow direct LAN / VPN connections** on the launcher's **LAN & VPN**
+page and share the address shown under it. Windows then asks to allow Node.js through the firewall, which needs admin on many PCs.
 
 This repository only hosts the game's releases.
